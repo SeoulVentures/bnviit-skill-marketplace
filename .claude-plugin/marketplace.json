@@ -1,0 +1,18 @@
+{
+  "name": "bnviit-skill-marketplace",
+  "owner": {
+    "name": "SeoulVentures",
+    "email": "erik@seoulventures.net"
+  },
+  "metadata": {
+    "description": "비앤빛 안과 Claude Cowork용 스킬 마켓플레이스",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "bnviit-clinic",
+      "source": "./plugins/bnviit-clinic",
+      "description": "비앤빛 안과 운영을 돕는 Claude Cowork 스킬 모음 (예시 플러그인)"
+    }
+  ]
+}

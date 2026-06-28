@@ -1,0 +1,11 @@
+{
+  "name": "bnviit-clinic",
+  "description": "비앤빛 안과 운영을 돕는 Claude Cowork 스킬 모음",
+  "version": "0.1.0",
+  "author": {
+    "name": "SeoulVentures",
+    "email": "erik@seoulventures.net"
+  },
+  "homepage": "https://github.com/SeoulVentures/bnviit-skill-marketplace",
+  "keywords": ["bnviit", "clinic", "ophthalmology", "cowork"]
+}
