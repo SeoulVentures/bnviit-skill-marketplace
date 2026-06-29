@@ -1,0 +1,19 @@
+{
+  "name": "bnviit-rag",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ingest": "node ingest.mjs",
+    "query": "node query.mjs",
+    "status": "node status.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.2.17",
+    "@huggingface/transformers": "3.8.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
