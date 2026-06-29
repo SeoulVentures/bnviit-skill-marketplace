@@ -8,3 +8,6 @@ knowledge/
 
 # SDD 진행 ledger (로컬 scratch)
 .superpowers/
+
+# 채널 연동학습(teach) 산출물 — 로컬·기밀(작업자 로컬에만 보존, 절대 커밋/푸시 금지)
+.bnviit-teach/
