@@ -23,8 +23,8 @@ description: 비앤빛 채널 연동학습 진입 — "<채널> <작업>"의 반
 3. **권한 확인(✋)** — desktop: `request_access`로 작업에 필요한 **최소 앱·티어**만 / web: **Ask before acting**·단일-action 승인·조직 allowlist 확인.
 4. **시연 학습(✋사람)** — 사람이 **합성 데이터로** UI 절차를 시연한다. 노출된 teach/조작 도구로 **절차만** 기록하고 **전송/발신 단계는 기록하지 않는다**(forbidden-send).
 5. **실시간 PII 감시(자동·차단)** — 세션 중 실환자/실 PII 화면 감지 시 **즉시 중단 + 로컬 산출물 purge**. **purge는 로컬 파일/shortcut 삭제만** 의미하며 이미 외부로 전달된 화면 정보는 **회수 불가** — 그래서 1차 방어는 항상 ②의 기록 전 합성-데이터 게이트다.
-6. **저장(자동)** — 절차를 `teach/replay.schema.json`으로 저장한다(저장 전 PII lint 통과 필수: 주민번호·전화·이메일·이름+연락처 패턴 발견 시 **저장 거부**). desktop→`.bnviit-teach/<채널>-<작업>.json`(gitignored), web→Chrome 확장 shortcut(검증된 export 있을 때만 로컬 미러).
-7. **드라이런 검증(자동)** — 학습 절차를 **발신 직전까지** 재생해 확인한다. **실제 발신은 안 함.** 각 step 실행 직전 **전송류 라벨(Send/보내기/제출/확인) 의미검증** — 전송 UI면 **중단·사람 인계**. **전송 가능 영역 좌표 fallback 금지**(셀렉터/라벨 필수). **web은 §6.4 검증된 runtime 계약이 있을 때만 자동 재생, 없으면 teach까지만(자동 replay 미지원)**.
+6. **저장(자동)** — 절차를 `teach/replay.schema.json` 형태로 만들고, **저장 전 `teach/validate.mjs`의 `validateArtifact`로 검증**한다(전송류 action 부재·`synthetic_only:true`·`agent_may_send:false`·`stop_before_step_id` 실재 step 참조·모든 문자열 필드 PII lint(주민번호·전화·이메일·이름+연락처)·`value_ref` enum·locator 추가 속성 차단·좌표 step `non_send:true` 단언). **`ok:false`면 fail-closed로 저장 중단.** desktop→`.bnviit-teach/<채널>-<작업>.json`(gitignored), web→Chrome 확장 shortcut(검증된 export 있을 때만 로컬 미러).
+7. **드라이런 검증(자동)** — 학습 절차를 **발신 직전까지** 재생해 확인한다(재생 전에도 `validate.mjs`로 재검증, `ok:false`면 중단). **실제 발신은 안 함.** 각 step 실행 직전 **전송류 라벨(Send/보내기/제출/확인) 의미검증** — 전송 UI면 **중단·사람 인계**. **전송 가능 영역 좌표 fallback 금지**(셀렉터/라벨 필수); 좌표 step은 `non_send:true` 단언이 강제되고 실행 직전 사람이 전송영역 아님을 확인, 모호하면 중단. **web은 §6.4 검증된 runtime 계약이 있을 때만 자동 재생, 없으면 teach까지만(자동 replay 미지원)**.
 
 **HITL 경계**: 합성-데이터 게이트·권한은 사람 확인. **전송/발신/전송확인 클릭은 학습 어디에도 포함되지 않으며 오직 사람이 직접 수행**한다(에이전트는 절대 클릭하지 않음, 승인으로도 위임 불가).
 

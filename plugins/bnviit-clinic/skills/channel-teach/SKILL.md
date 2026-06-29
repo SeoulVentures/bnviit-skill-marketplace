@@ -75,15 +75,15 @@ web backend는 "확장 연결 확인"만으로 충분하지 않다. connector는
 3. **권한 확인(✋)** — desktop: `request_access`(최소 앱·티어) / web: Ask before acting·단일-action·조직 allowlist.
 4. **시연 학습(✋사람)** — 사람이 **합성 데이터로** UI 절차를 시연 → 노출된 teach/조작 도구로 **절차만** 기록. **전송/발신 단계는 기록하지 않음**(forbidden-send).
 5. **실시간 PII 감시(자동·차단)** — 실환자/실 PII 화면 감지 시 **즉시 중단 + 로컬 산출물 purge**.
-6. **저장(자동)** — `teach/replay.schema.json`으로 저장(저장 전 PII lint 통과 필수). desktop→`.bnviit-teach/<채널>-<작업>.json`(gitignored), web→확장 shortcut(검증된 export 있을 때만 로컬 미러).
+6. **저장(자동)** — `teach/replay.schema.json` 형태 + **저장 전 `teach/validate.mjs`의 `validateArtifact`로 운영 불변식 검증**(전송류 action 부재·`synthetic_only:true`·`agent_may_send:false`·`stop_before_step_id` 실재 step 참조·모든 문자열 필드 PII lint·`value_ref` enum·locator 추가 속성 차단·좌표 step `non_send:true` 단언). **`ok:false`면 fail-closed로 저장 중단.** desktop→`.bnviit-teach/<채널>-<작업>.json`(gitignored), web→확장 shortcut(검증된 export 있을 때만 로컬 미러).
 7. **검증 재생(자동·드라이런)** — 발신 직전까지만 재생해 확인. **실제 발신은 안 함.**
 
 ## 보조 재생 (replay) — fail-closed executor + 전송 UI 의미검증
 
-replay 실행기는 **fail-closed**다. 또한 **각 step 실행 직전에 대상 locator/라벨이 전송류 UI인지 의미 검증**한다.
+replay 실행기는 **fail-closed**다. 재생 시작 전 산출물을 **`teach/validate.mjs`의 `validateArtifact`로 다시 검증**하고 `ok:false`면 재생을 시작하지 않는다(fail-closed). 또한 **각 step 실행 직전에 대상 locator/라벨이 전송류 UI인지 의미 검증**한다.
 
 - **전송 UI 의미검증(필수)**: step 실행 직전, 대상 요소의 접근성 라벨·텍스트가 전송류(`Send`/`보내기`/`전송`/`제출`/`확인`/`Submit`/유사 다국어)에 해당하는지 검사한다. 해당하면 **클릭하지 않고 즉시 중단·사람 인계**한다. `click` action이라도 전송 버튼을 누르는 것은 이 게이트에서 차단된다.
-- **전송 가능 영역 좌표 fallback 금지**: 좌표만 있는 locator는 라벨 매칭이 불가하므로, 전송류 UI에 도달 가능한 영역에서는 **좌표 fallback을 허용하지 않는다**(셀렉터/라벨 필수).
+- **전송 가능 영역 좌표 fallback 금지**: 좌표만 있는 locator는 라벨 매칭이 불가하므로, 전송류 UI에 도달 가능한 영역에서는 **좌표 fallback을 허용하지 않는다**(셀렉터/라벨 필수). 좌표 step은 산출물에 `non_send:true` 단언이 강제되며, **좌표 step 실행 직전 사람이 대상이 전송 영역이 아님을 확인**한다 — 모호하면 진행하지 않고 중단(fail-closed)한다. 휴리스틱 한계(다국어·아이콘 전송 버튼)는 §11 후속이며, 구조 차원에서 전송 가능 영역 좌표를 금지하는 것이 1차 보장이다.
 - 다음 중 하나라도 발생하면 즉시 중단하고 사람에게 인계: assertion 실패/화면 불일치, locator 불일치, 전송류 UI 의미검증에 걸림, `send_boundary.stop_before_step_id` 참조 step 도달, 링크/첨부/리디렉션/다운로드 유발 요소 조우, 실환자/실 PII 화면 감지.
 - 메시지 콘텐츠는 임무 스킬이 생성하고 medical-safety·pii 게이트를 통과한 초안만 사용한다. **최종 발신 클릭은 사람**이며, 산출물에 전송 단계가 부재하므로 에이전트 경로상 발신 도달이 불가능하다.
 
@@ -102,6 +102,7 @@ fail-closed executor·step별 의미검증·PII lint는 실행기가 step 단위
 ## 의존성
 
 - `teach/channels.json` — 채널→표면→backend 매핑 정본.
-- `teach/replay.schema.json` — 학습 산출물 JSON Schema 정본(전송 단계 구조적 부재·`synthetic_only:true`·`agent_may_send:false`).
+- `teach/replay.schema.json` — 학습 산출물 JSON Schema 정본(전송 단계 구조적 부재·`synthetic_only:true`·`agent_may_send:false`·locator `additionalProperties:false`·좌표 step `non_send:true`·`action===type`→`value_ref` 조건부 필수).
+- `teach/validate.mjs` — 운영 불변식 검증기(`validateArtifact`). 저장·replay 전 호출, `ok:false`면 fail-closed 중단. 외부 의존성 0.
 - 메시지 콘텐츠: `patient-faq-reply` 등 임무 스킬 + `medical-safety-checker`·`pii-masker` 게이트.
 - 구체 셀렉터·채널별 기밀 세부는 로컬 `knowledge/`(gitignored) 및 `.bnviit-teach/`(gitignored) 참조.

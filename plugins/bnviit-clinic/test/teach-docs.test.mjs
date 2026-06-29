@@ -19,6 +19,9 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+// 운영 불변식 검증기(정본). 테스트는 보조 함수가 아니라 이 모듈을 import해
+// positive/negative fixture를 강제한다(false-pass 방지). 저장·replay 전에도 동일 모듈을 쓴다.
+import { validateArtifact } from '../teach/validate.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = dirname(__dirname);            // test/ → bnviit-clinic
@@ -27,10 +30,14 @@ const REPO_ROOT = dirname(dirname(PLUGIN_ROOT));   // plugins/bnviit-clinic → 
 const TEACH_DIR = join(PLUGIN_ROOT, 'teach');
 const CHANNELS_PATH = join(TEACH_DIR, 'channels.json');
 const SCHEMA_PATH = join(TEACH_DIR, 'replay.schema.json');
+const VALIDATE_PATH = join(TEACH_DIR, 'validate.mjs');
 const SKILL_PATH = join(PLUGIN_ROOT, 'skills', 'channel-teach', 'SKILL.md');
 const CMD_TEACH = join(PLUGIN_ROOT, 'commands', 'bnviit-teach.md');
 const CMD_REPLAY = join(PLUGIN_ROOT, 'commands', 'bnviit-teach-replay.md');
 const GITIGNORE_PATH = join(REPO_ROOT, '.gitignore');
+
+// 정본 산출물 문서 내 PII 부재 검사용 패턴.
+const RRN_RE = /\b\d{6}-\d{7}\b/;
 
 function read(p) {
   return readFileSync(p, 'utf8');
@@ -42,194 +49,11 @@ function splitFrontmatter(text) {
   return { frontmatter: m[1], body: m[2] };
 }
 
-// 본문 텍스트(frontmatter + body, 문구 검사용)
-function allText(p) {
-  return read(p);
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// 최소 JSON Schema 검증기(외부 의존성 0). 본 스키마가 쓰는 키워드만 지원:
-//   type, const, enum, required, additionalProperties, properties,
-//   items, minItems, maxItems, pattern, anyOf
-// 충분히 보수적으로 구현 — 모르는 키워드는 무시하되, 다루는 키워드는 엄격히 검사.
-// ──────────────────────────────────────────────────────────────────────
-function typeOf(v) {
-  if (v === null) return 'null';
-  if (Array.isArray(v)) return 'array';
-  return typeof v; // object|string|number|boolean
-}
-
-function matchesType(v, t) {
-  if (t === 'integer') return typeof v === 'number' && Number.isInteger(v);
-  if (t === 'number') return typeof v === 'number';
-  return typeOf(v) === t;
-}
-
-// 통과하면 [] (오류 없음), 실패하면 오류 메시지 배열을 반환.
-function validate(schema, value, path = '$') {
-  const errors = [];
-  if (schema == null || typeof schema !== 'object') return errors;
-
-  if ('const' in schema && !deepEqual(value, schema.const)) {
-    errors.push(`${path}: const 불일치(기대 ${JSON.stringify(schema.const)})`);
-  }
-  if (Array.isArray(schema.enum) && !schema.enum.some((e) => deepEqual(e, value))) {
-    errors.push(`${path}: enum 밖 값 ${JSON.stringify(value)}`);
-  }
-  if (schema.type) {
-    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
-    if (!types.some((t) => matchesType(value, t))) {
-      errors.push(`${path}: type 불일치(기대 ${types.join('|')}, 실제 ${typeOf(value)})`);
-    }
-  }
-  if (typeof value === 'string' && typeof schema.pattern === 'string') {
-    if (!new RegExp(schema.pattern).test(value)) {
-      errors.push(`${path}: pattern 불일치(${schema.pattern})`);
-    }
-  }
-
-  if (typeOf(value) === 'object') {
-    const props = schema.properties ?? {};
-    for (const reqKey of schema.required ?? []) {
-      if (!(reqKey in value)) errors.push(`${path}: 필수 키 누락 '${reqKey}'`);
-    }
-    if (schema.additionalProperties === false) {
-      for (const k of Object.keys(value)) {
-        if (!(k in props)) errors.push(`${path}: 허용되지 않은 추가 속성 '${k}'`);
-      }
-    }
-    for (const [k, sub] of Object.entries(props)) {
-      if (k in value) errors.push(...validate(sub, value[k], `${path}.${k}`));
-    }
-  }
-
-  if (typeOf(value) === 'array') {
-    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
-      errors.push(`${path}: minItems ${schema.minItems} 미만`);
-    }
-    if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) {
-      errors.push(`${path}: maxItems ${schema.maxItems} 초과`);
-    }
-    if (schema.items) {
-      value.forEach((item, i) => {
-        errors.push(...validate(schema.items, item, `${path}[${i}]`));
-      });
-    }
-  }
-
-  if (Array.isArray(schema.anyOf)) {
-    const ok = schema.anyOf.some((sub) => validate(sub, value, path).length === 0);
-    if (!ok) errors.push(`${path}: anyOf 어느 것도 불충족`);
-  }
-
-  return errors;
-}
-
-function deepEqual(a, b) {
-  if (a === b) return true;
-  if (typeof a !== typeof b) return false;
-  if (typeof a !== 'object' || a === null || b === null) return false;
-  const ak = Object.keys(a);
-  const bk = Object.keys(b);
-  if (ak.length !== bk.length) return false;
-  return ak.every((k) => deepEqual(a[k], b[k]));
-}
-
-// 스키마 형태 통과 여부.
-function schemaValid(schema, value) {
-  return validate(schema, value).length === 0;
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// 저장 전 추가 게이트(§6.3 PII lint + §6.1 stop_before_step_id 참조 + 중복 id +
-// 전송영역 좌표-only). schema는 형태, 본 게이트는 내용/참조 무결성을 강제한다.
-// ──────────────────────────────────────────────────────────────────────
-const RRN_RE = /\b\d{6}-\d{7}\b/;
-const PHONE_RE = /\b\d{2,3}-\d{3,4}-\d{4}\b/;
-const EMAIL_RE = /[^\s<>"']+@[^\s<>"']+\.[^\s<>"']+/;
-// 한국 이름(성+이름) + 존칭(님/씨) 또는 '이름+환자' 맥락 — 보수적 휴리스틱.
-//   합성/테스트/가상/실(실환자) 등 *마커* 뒤의 '환자'는 식별 이름이 아니므로 제외(오탐 방지).
-const SYNTHETIC_MARKER = /(합성|테스트|가상|실|샘플|예시|더미)$/;
-function hasName(text) {
-  // (a) 이름 + 존칭(님/씨): 마커 단어 자체가 아닌 실제 성명으로 간주.
-  for (const m of text.matchAll(/([가-힣]{2,4})\s*(님|씨)/g)) {
-    if (!SYNTHETIC_MARKER.test(m[1])) return true;
-  }
-  // (b) 이름 + '환자': 단 마커(합성 환자 등)는 제외.
-  for (const m of text.matchAll(/([가-힣]{2,4})\s*환자/g)) {
-    if (!SYNTHETIC_MARKER.test(m[1])) return true;
-  }
-  return false;
-}
-
-function collectStringFields(artifact) {
-  const out = [];
-  const push = (v) => { if (typeof v === 'string') out.push(v); };
-  push(artifact.target);
-  push(artifact.channel);
-  push(artifact.app);
-  push(artifact.domain);
-  for (const p of artifact.preconditions ?? []) push(p);
-  for (const s of artifact.steps ?? []) {
-    push(s.assertion);
-    if (s.locator) {
-      push(s.locator.selector);
-      push(s.locator.a11y_label);
-    }
-  }
-  return out;
-}
-
-function hasPii(text) {
-  return RRN_RE.test(text) || PHONE_RE.test(text) || EMAIL_RE.test(text) || hasName(text);
-}
-
-// 전송류 라벨 휴리스틱(§6.2 의미검증과 동일 취지) — 좌표-only 거부 판정에 사용.
-const SEND_LABEL_RE = /send|submit|보내기|전송|제출|확인/i;
-
-// 산출물이 "저장 가능"한지: schema 통과 + 추가 불변식 전부 통과.
-// 거부 사유를 배열로 반환(빈 배열이면 저장 허용).
-function rejectReasons(schema, artifact) {
-  const reasons = [];
-  // (1) schema 형태
-  const schemaErrors = validate(schema, artifact);
-  if (schemaErrors.length) reasons.push(...schemaErrors);
-
-  // (2) PII lint — 모든 문자열 필드(자유 문자열) 검사. value_ref는 enum이라 자유 문자열 자리 없음.
-  for (const f of collectStringFields(artifact)) {
-    if (hasPii(f)) reasons.push(`PII lint 거부: '${f}'`);
-  }
-
-  // (3) step id 유일성 + stop_before_step_id 실재 참조
-  const steps = artifact.steps ?? [];
-  const ids = steps.map((s) => s && s.id).filter((x) => typeof x === 'string');
-  if (new Set(ids).size !== ids.length) reasons.push('step id 중복');
-  const stopId = artifact.send_boundary && artifact.send_boundary.stop_before_step_id;
-  if (stopId !== undefined && !ids.includes(stopId)) {
-    reasons.push(`stop_before_step_id 미존재 참조('${stopId}')`);
-  }
-
-  // (4) 전송 가능 영역 좌표 fallback 금지:
-  //   라벨/셀렉터가 전송류이거나 assertion이 전송류를 시사하는 step이 좌표-only면 거부.
-  for (const s of steps) {
-    const loc = s.locator ?? {};
-    const coordOnly = loc.coordinate && !loc.selector && !loc.a11y_label;
-    const sendish =
-      SEND_LABEL_RE.test(loc.a11y_label ?? '') ||
-      SEND_LABEL_RE.test(loc.selector ?? '') ||
-      SEND_LABEL_RE.test(s.assertion ?? '');
-    if (coordOnly && sendish) reasons.push(`전송영역 좌표-only locator(step ${s.id})`);
-  }
-
-  return reasons;
-}
-
-// ── fixture 로더 ──────────────────────────────────────────────────────
 function loadSchema() {
   return JSON.parse(read(SCHEMA_PATH));
 }
 
-// 유효(positive) 기준 산출물 — 합성·전송 부재.
+// 유효(positive) 기준 산출물 — 합성·전송 부재. validateArtifact가 ok:true 여야 한다.
 function validArtifact() {
   return {
     schema_version: '1.0',
@@ -283,12 +107,35 @@ test('§8.1 구조: 커맨드 2종·channel-teach SKILL 존재 + frontmatter', (
   }
 });
 
-test('§8.1 구조: replay.schema.json 유효 JSON Schema(draft 2020-12)', () => {
+test('§8.1 구조: replay.schema.json 유효 JSON Schema(draft 2020-12) + validate.mjs 모듈 존재', () => {
   assert.ok(existsSync(SCHEMA_PATH), `누락: ${SCHEMA_PATH}`);
+  assert.ok(existsSync(VALIDATE_PATH), `운영 검증기 누락: ${VALIDATE_PATH}`);
   const schema = loadSchema();
   assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema', '$schema 불일치');
   assert.equal(schema.type, 'object', 'top-level type object 아님');
   assert.ok(Array.isArray(schema.required), 'required 누락');
+  // (2) locator additionalProperties:false (임의 문자열 주입 차단)
+  assert.equal(
+    schema.properties.steps.items.properties.locator.additionalProperties,
+    false,
+    'locator additionalProperties:false 누락(raw_value 주입 차단)',
+  );
+  // (3) non_send const:true 단언 + coordinate→non_send 조건부 필수
+  assert.equal(
+    schema.properties.steps.items.properties.non_send.const,
+    true,
+    'non_send const:true 누락',
+  );
+  const allOf = schema.properties.steps.items.allOf ?? [];
+  assert.ok(
+    allOf.some((c) => c.if?.properties?.locator?.required?.includes('coordinate') && c.then?.required?.includes('non_send')),
+    'coordinate→non_send 조건부 필수(if/then) 누락',
+  );
+  // (4) action==="type"→value_ref 조건부 필수
+  assert.ok(
+    allOf.some((c) => c.if?.properties?.action?.const === 'type' && c.then?.required?.includes('value_ref')),
+    'action===type→value_ref 조건부 필수(if/then) 누락',
+  );
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -322,94 +169,107 @@ test('§8.2 forbidden-send: value_ref enum(from_mission_skill/synthetic_fixture/
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// 3. JSON Schema fixture (positive / negative)
+// 3. 운영 검증기(validate.mjs) fixture (positive / negative)
+//    테스트 보조 함수가 아니라 운영 모듈 validateArtifact를 직접 구동(false-pass 방지).
 // ──────────────────────────────────────────────────────────────────────
-test('§8.3 positive: 유효 산출물 fixture는 schema 통과 + 저장 허용', () => {
-  const schema = loadSchema();
-  const art = validArtifact();
-  assert.deepEqual(validate(schema, art), [], 'positive fixture가 schema 거부됨');
-  assert.deepEqual(rejectReasons(schema, art), [], 'positive fixture가 저장 게이트에서 거부됨');
+test('§8.3 positive: 유효 산출물 fixture는 validateArtifact ok:true', () => {
+  const r = validateArtifact(validArtifact());
+  assert.equal(r.ok, true, `positive fixture가 거부됨: ${r.errors.join('; ')}`);
 });
 
-test('§8.3 negative(a): 전송 action 포함 fixture는 schema 거부', () => {
-  const schema = loadSchema();
+test('§8.3 negative(a): 전송 action 포함 fixture는 거부', () => {
   const art = validArtifact();
   art.steps.push({ id: 'send-it', locator: { a11y_label: '보내기' }, action: 'send', assertion: '발송됨' });
-  assert.ok(!schemaValid(schema, art), '전송 action(send) fixture가 통과됨');
+  const r = validateArtifact(art);
+  assert.equal(r.ok, false, '전송 action(send) fixture가 통과됨');
+  assert.ok(r.errors.some((e) => /action: enum 밖/.test(e)), `action enum 거부 사유 누락: ${r.errors.join('; ')}`);
 });
 
-test('§8.3 negative(b): synthetic_only:false fixture는 schema 거부', () => {
-  const schema = loadSchema();
+test('§8.3 negative(b): synthetic_only:false fixture는 거부', () => {
   const art = validArtifact();
   art.synthetic_only = false;
-  assert.ok(!schemaValid(schema, art), 'synthetic_only:false fixture가 통과됨');
+  const r = validateArtifact(art);
+  assert.equal(r.ok, false, 'synthetic_only:false fixture가 통과됨');
+  assert.ok(r.errors.some((e) => /synthetic_only/.test(e)), '합성 전용 위반 사유 누락');
 });
 
-test('§8.3 negative(c): value_ref 자유 문자열(실제 값) fixture는 schema 거부', () => {
-  const schema = loadSchema();
+test('§8.3 negative(c): value_ref 자유 문자열(실제 값) fixture는 거부', () => {
   const art = validArtifact();
   art.steps[2].action = 'type';
   art.steps[2].value_ref = '안녕하세요 환자분 010-1234-5678'; // enum 밖 자유 문자열
-  assert.ok(!schemaValid(schema, art), 'value_ref 자유 문자열 fixture가 통과됨');
+  const r = validateArtifact(art);
+  assert.equal(r.ok, false, 'value_ref 자유 문자열 fixture가 통과됨');
+  assert.ok(r.errors.some((e) => /value_ref: enum 밖/.test(e)), 'value_ref enum 거부 사유 누락');
 });
 
-test('§8.3 negative(d): stop_before_step_id 미존재 id fixture는 저장 게이트에서 거부', () => {
-  const schema = loadSchema();
+test('§8.3 negative(d): stop_before_step_id 미존재 id fixture는 거부', () => {
   const art = validArtifact();
   art.send_boundary.stop_before_step_id = 'does-not-exist';
-  // schema 형태는 string이라 통과할 수 있으나, 참조 무결성 게이트가 거부해야 한다.
-  const reasons = rejectReasons(schema, art);
-  assert.ok(
-    reasons.some((r) => r.includes('stop_before_step_id 미존재')),
-    `미존재 stop_before_step_id가 거부되지 않음: ${reasons.join('; ')}`,
-  );
+  const r = validateArtifact(art);
+  assert.equal(r.ok, false, '미존재 stop_before_step_id fixture가 통과됨');
+  assert.ok(r.errors.some((e) => /stop_before_step_id: 미존재/.test(e)), '미존재 참조 거부 사유 누락');
 });
 
-test('§8.3 negative(e): 전송 가능 영역 좌표-only locator fixture는 저장 게이트에서 거부', () => {
-  const schema = loadSchema();
+test('§8.3 negative(e): 전송 가능 영역 좌표 step에 non_send 단언 부재 fixture는 거부', () => {
   const art = validArtifact();
-  // 전송류 라벨을 시사하는 step을 좌표-only로 추가(셀렉터/라벨 없음).
-  art.steps.push({
-    id: 'near-send',
-    locator: { coordinate: [400, 720] },
-    action: 'click',
-    assertion: '보내기 버튼 인근',
-  });
+  // 좌표 locator step을 non_send 단언 없이 추가 → 구조적으로 거부되어야 함.
+  art.steps.push({ id: 'near-send', locator: { coordinate: [400, 720] }, action: 'click', assertion: '버튼 인근' });
   art.send_boundary.stop_before_step_id = 'near-send';
-  const reasons = rejectReasons(schema, art);
-  assert.ok(
-    reasons.some((r) => r.includes('좌표-only')),
-    `전송영역 좌표-only가 거부되지 않음: ${reasons.join('; ')}`,
-  );
+  const r = validateArtifact(art);
+  assert.equal(r.ok, false, '좌표-only(non_send 부재) fixture가 통과됨');
+  assert.ok(r.errors.some((e) => /non_send/.test(e)), `non_send 필수 거부 사유 누락: ${r.errors.join('; ')}`);
+});
+
+test('§8.3 negative(f): action==="type"인데 value_ref 부재 fixture는 거부', () => {
+  const art = validArtifact();
+  art.steps[2].action = 'type'; // value_ref 미부여
+  const r = validateArtifact(art);
+  assert.equal(r.ok, false, 'type action + value_ref 부재 fixture가 통과됨');
+  assert.ok(r.errors.some((e) => /value_ref.*필수/.test(e)), 'type→value_ref 필수 거부 사유 누락');
+});
+
+test('§8.3 negative(g): locator 추가 속성(raw_value) fixture는 거부', () => {
+  const art = validArtifact();
+  art.steps[0].locator = { selector: '#x', raw_value: '환자에게 보낼 실제 메시지 리터럴' };
+  const r = validateArtifact(art);
+  assert.equal(r.ok, false, 'locator raw_value 추가 속성 fixture가 통과됨');
+  assert.ok(r.errors.some((e) => /locator\.raw_value/.test(e)), 'locator 추가 속성 거부 사유 누락');
+});
+
+test('§8.3 positive: 좌표 step + non_send:true 단언은 허용', () => {
+  const art = validArtifact();
+  art.steps.push({ id: 'scroll-list', locator: { coordinate: [200, 300] }, action: 'scroll', non_send: true, assertion: '목록 스크롤됨' });
+  const r = validateArtifact(art);
+  assert.equal(r.ok, true, `좌표+non_send:true fixture가 거부됨: ${r.errors.join('; ')}`);
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// 4. PII lint adversarial fixture
+// 4. PII lint adversarial fixture (validate.mjs 운영 검증기 — 모든 문자열 필드)
 // ──────────────────────────────────────────────────────────────────────
-test('§8.4 PII lint adversarial: 임의 문자열 필드의 PII는 저장 전 거부(fail-closed)', () => {
-  const schema = loadSchema();
-
+test('§8.4 PII lint adversarial: 임의 문자열 필드의 PII는 validateArtifact가 거부(fail-closed)', () => {
   const cases = [
     ['target', (a) => { a.target = '홍길동님 안내 절차'; }],            // 이름+존칭
     ['preconditions', (a) => { a.preconditions.push('연락처 010-1234-5678 확인됨'); }], // 전화
     ['selector', (a) => { a.steps[0].locator.selector = '#patient-880101-1234567'; }], // 주민번호
     ['a11y_label', (a) => { a.steps[1].locator = { a11y_label: 'patient@example.com 대화' }; }], // 이메일
     ['assertion', (a) => { a.steps[2].assertion = '김환자님 010-9876-5432 노출됨'; }], // 이름+전화
+    ['stop_before_step_id 근접 X(전화 in precondition)', (a) => { a.preconditions.push('환자 김민수님 연락'); }], // 이름+존칭
   ];
 
   for (const [field, mutate] of cases) {
     const art = validArtifact();
     mutate(art);
-    const reasons = rejectReasons(schema, art);
+    const r = validateArtifact(art);
+    assert.equal(r.ok, false, `${field} 필드의 PII가 거부되지 않음`);
     assert.ok(
-      reasons.some((r) => r.startsWith('PII lint 거부')),
-      `${field} 필드의 PII가 거부되지 않음: ${reasons.join('; ')}`,
+      r.errors.some((e) => /PII lint 거부/.test(e)),
+      `${field}: PII lint 거부 사유 누락: ${r.errors.join('; ')}`,
     );
   }
 });
 
 test('§8.4 정본 산출물·문서에 실환자 라벨(이름+연락처·전화·주민번호·이메일) 부재', () => {
-  for (const p of [CHANNELS_PATH, SCHEMA_PATH, SKILL_PATH, CMD_TEACH, CMD_REPLAY]) {
+  for (const p of [CHANNELS_PATH, SCHEMA_PATH, VALIDATE_PATH, SKILL_PATH, CMD_TEACH, CMD_REPLAY]) {
     const text = read(p);
     assert.doesNotMatch(text, RRN_RE, `${p}: 주민번호 패턴 존재`);
     // 문서 내 설명용 전화/이메일 예시도 금지(정본은 출처 키만 쓰므로).
@@ -444,6 +304,24 @@ test('§8.6 web replay 불변식: 검증된 runtime 계약 있을 때만, 없으
     assert.match(text, /runtime\s*계약/, `${p}: 검증된 runtime 계약 문구 누락`);
     assert.match(text, /teach까지만/, `${p}: teach까지만(자동 replay 미지원) 문구 누락`);
     assert.match(text, /미지원/, `${p}: 미지원 문구 누락`);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// 6b. validate.mjs 운영 검증기 계약 문구(저장·replay 전 검증·실패 시 fail-closed)
+// ──────────────────────────────────────────────────────────────────────
+test('§8.6b validate.mjs 계약 문구: 저장·replay 전 validate.mjs 검증·ok:false면 fail-closed', () => {
+  for (const p of [SKILL_PATH, CMD_TEACH, CMD_REPLAY]) {
+    const text = read(p);
+    assert.match(text, /validate\.mjs/, `${p}: validate.mjs 참조 누락`);
+    assert.match(text, /validateArtifact/, `${p}: validateArtifact 참조 누락`);
+    assert.match(text, /ok\s*:\s*false|fail-closed/, `${p}: fail-closed(ok:false) 중단 문구 누락`);
+  }
+  // 좌표 step 사람 확인(전송영역 아님) 문구 — replay 경로(SKILL·replay 커맨드)에 존재.
+  for (const p of [SKILL_PATH, CMD_REPLAY]) {
+    const text = read(p);
+    assert.match(text, /non_send/, `${p}: non_send 단언 문구 누락`);
+    assert.match(text, /전송\s*영역(이)?\s*아님|전송\s*영역이\s*아님/, `${p}: 좌표 step 전송영역 아님 확인 문구 누락`);
   }
 });
 
@@ -507,7 +385,7 @@ test('§8.10 안전 문구: 합성 데이터 전용·전송 영구 제외(사람
 // ──────────────────────────────────────────────────────────────────────
 test('§8.11 기밀 미포함: 정본 teach 산출물에 실명+연락처·전화·주민번호·이메일 패턴 부재', () => {
   const NAME_CONTACT = /[가-힣]{2,4}\s*(님|환자|씨)\s*[\d(]/; // 이름+연락처 근접
-  for (const p of [CHANNELS_PATH, SCHEMA_PATH, SKILL_PATH, CMD_TEACH, CMD_REPLAY]) {
+  for (const p of [CHANNELS_PATH, SCHEMA_PATH, VALIDATE_PATH, SKILL_PATH, CMD_TEACH, CMD_REPLAY]) {
     const text = read(p);
     assert.doesNotMatch(text, RRN_RE, `${p}: 주민번호 패턴`);
     assert.doesNotMatch(text, NAME_CONTACT, `${p}: 실명+연락처 패턴`);

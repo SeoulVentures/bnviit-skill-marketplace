@@ -46,13 +46,14 @@
           },
           "locator": {
             "type": "object",
-            "description": "우선순위: 안정 셀렉터 → 접근성 라벨 → 좌표(최후 폴백). 좌표는 라벨 의미검증이 불가하므로 전송 가능 영역에서는 금지(§6.2)",
+            "additionalProperties": false,
+            "description": "우선순위: 안정 셀렉터 → 접근성 라벨 → 좌표(최후 폴백). 허용 속성은 selector·a11y_label·coordinate만(raw_value 등 임의 문자열 주입 차단). 좌표는 라벨 의미검증이 불가하므로 전송 가능 영역에서는 금지(§6.2)",
             "properties": {
               "selector": { "type": "string" },
               "a11y_label": { "type": "string" },
               "coordinate": {
                 "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
-                "description": "최후 폴백 전용. 좌표만으로 식별되는 단계는 비권장. 전송류 UI(Send/보내기/제출/확인)에 도달 가능한 영역에서는 좌표 fallback 금지 — 셀렉터/라벨 필수"
+                "description": "최후 폴백 전용. 좌표만으로 식별되는 단계는 비권장. 전송류 UI(Send/보내기/제출/확인)에 도달 가능한 영역에서는 좌표 fallback 금지 — 셀렉터/라벨 필수. coordinate 사용 step은 non_send:true 단언 필수"
               }
             },
             "anyOf": [
@@ -69,11 +70,25 @@
             "enum": ["from_mission_skill", "synthetic_fixture", "none"],
             "description": "타이핑 값의 출처 키만 허용(자유 문자열 금지). action===type일 때만 from_mission_skill/synthetic_fixture 의미. 실제 값 리터럴은 산출물에 저장하지 않음(저장 전 PII lint로 강제, §6.3)"
           },
+          "non_send": {
+            "const": true,
+            "description": "이 step의 대상이 전송 가능 영역이 아님을 명시하는 단언. coordinate locator를 쓰는 step에서는 필수(좌표는 라벨 의미검증이 불가하므로 전송영역 좌표 fallback을 구조적으로 차단, §6.2). true만 허용"
+          },
           "assertion": {
             "type": "string",
             "description": "단계 성공 판정 조건. 불충족 시 fail-closed 중단. 자유 문자열이지만 저장 전 PII lint 대상(§6.3)"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "action": { "const": "type" } }, "required": ["action"] },
+            "then": { "required": ["value_ref"] }
+          },
+          {
+            "if": { "properties": { "locator": { "required": ["coordinate"] } }, "required": ["locator"] },
+            "then": { "required": ["non_send"] }
+          }
+        ]
       }
     }
   }
