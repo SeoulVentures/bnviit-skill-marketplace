@@ -1,0 +1,32 @@
+{
+  "_comment": "기관 공개번호 화이트리스트 정본 (정본: spec §7.4). 여기 등록된 번호만 기밀 스캔의 전화번호 금지(\\d{2,3}-\\d{3,4}-\\d{4})에서 예외 처리한다. 그 외 위치/값의 전화번호 패턴은 모두 환자 개인 연락처로 간주해 위반 처리한다. 등록값은 기관이 공개적으로 안내하는 대표번호·긴급번호이며 비앤빛 개인 연락처가 아니다. 병원 대표/응급실 번호는 placeholder(일반 형식)이며 실제 운영 번호는 knowledge 참조로 주입한다.",
+  "version": "1.0.0",
+  "approvedAt": "2026-06-30",
+  "owner": "clinic-ops-team",
+  "whitelist": [
+    {
+      "label": "응급 신고 (공공 긴급번호)",
+      "number": "119",
+      "type": "public-emergency",
+      "note": "대한민국 공공 응급/구급 신고 번호. 일반 공개번호."
+    },
+    {
+      "label": "응급 의료정보센터 (공공 안내)",
+      "number": "1339",
+      "type": "public-emergency",
+      "note": "대한민국 공공 응급의료 상담/안내 번호. 일반 공개번호."
+    },
+    {
+      "label": "비앤빛 안과 대표번호 (placeholder)",
+      "number": "00-000-0000",
+      "type": "clinic-main",
+      "note": "병원 대표번호 placeholder. 실제 운영 대표번호는 knowledge 참조로 주입한다(공개 파일에 실번호 미기재)."
+    },
+    {
+      "label": "비앤빛 안과 응급/야간 직통 (placeholder)",
+      "number": "00-000-0000",
+      "type": "clinic-emergency",
+      "note": "병원 응급/야간 직통 placeholder. 실제 운영 번호는 knowledge 참조로 주입한다."
+    }
+  ]
+}

@@ -12,7 +12,7 @@
     {
       "name": "bnviit-clinic",
       "source": "./plugins/bnviit-clinic",
-      "description": "비앤빛 안과 운영을 돕는 Claude Cowork 스킬 모음 (예시 플러그인)"
+      "description": "비앤빛 안과 임무 수행 스킬·에이전트 (환자 상담·수술후 케어·PMO·의료안전/PII 게이트)"
     },
     {
       "name": "bnviit-rag",

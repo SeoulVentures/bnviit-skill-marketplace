@@ -4,8 +4,16 @@ description: 비앤빛 지식 의미 검색 — "질문"을 로컬 RAG로 검색
 
 비앤빛 업무 지식을 의미 기반으로 검색한다. 결과는 출처(`source`, `heading`)와 함께 제시하며, 근거 부족 시 abstain한다.
 
+> ⚠️ **보안 — 명령 주입 차단(argv-safe)**: 사용자 질문을 셸 명령 문자열에 **raw로 보간하지 마라**. 질문에 셸 메타문자(`;` `|` `&` `$()` 백틱 `>` `<` `"` `'`)가 있으면 임의 명령으로 실행될 수 있다.
+> - 질문은 **환경변수로 전달**하고 `"$RAG_Q"`로 인용(단어 분리·재해석 차단)하거나, 셸을 거치지 않는 **argv 전달(`execFile` 시맨틱)** 을 우선한다.
+> - 질문에 셸 메타문자가 포함되면 **안전 실패로 간주해 거부**하거나 안전 인용 후 진행한다.
+> - 환자 문의는 반드시 `patient-faq-reply`를 경유한다. RAG에는 그 스킬이 `preprocess.mjs`로 마스킹한 **`maskedQuery`만** 전달한다(환자 원문 직접 전달 금지).
+
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/query.mjs" "질문" --root <프로젝트_루트> [--k N] [--type knowledge|agent|skill|sop] [--json]
+# 질문을 환경변수로 전달(셸 메타문자 안전). 절대 명령 문자열에 raw 보간 금지.
+RAG_Q='<마스킹된 질문 또는 일반 질의>' \
+  node "${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/query.mjs" "$RAG_Q" \
+  --root <프로젝트_루트> [--k N] [--type knowledge|agent|skill|sop] [--json]
 ```
 
 옵션:
