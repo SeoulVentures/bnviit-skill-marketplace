@@ -35,7 +35,9 @@ export function collectSources(root) {
     const files = [];
     walk(base, rootReal, files);
     for (const abs of files) {
-      out.push({ absPath: abs, source: path.relative(rootReal, abs), sourceType: TYPE_MAP[dir] });
+      // source는 항상 POSIX 슬래시로 정규화(Windows `\` → `/`) — DB 키·테스트 일관성
+      const source = path.relative(rootReal, abs).split(path.sep).join('/');
+      out.push({ absPath: abs, source, sourceType: TYPE_MAP[dir] });
     }
   }
   return out;
