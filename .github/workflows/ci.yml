@@ -74,6 +74,7 @@ jobs:
         run: >-
           node --test
           plugins/bnviit-clinic/test/mission-docs.test.mjs
+          plugins/bnviit-clinic/test/teach-docs.test.mjs
           plugins/bnviit-clinic/skills/patient-faq-reply/preprocess.test.mjs
 
   # 마켓플레이스/플러그인 JSON 유효성(빠른 게이트)

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "bnviit teach replay artifact",
+  "description": "비앤빛 채널 연동학습 산출물 JSON Schema 정본. 설계 spec §6.1. 합성 데이터 전용·전송 영구 제외(forbidden-send invariant)를 구조적으로 강제한다. 본 스키마는 형태(shape)만 강제하며, 저장 전 PII lint(§6.3)와 실행 직전 전송 UI 의미검증(§6.2)이 추가 게이트로 동작한다.",
+  "type": "object",
+  "required": ["schema_version", "channel", "surface", "backend", "target", "synthetic_only", "send_boundary", "preconditions", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "channel": { "type": "string" },
+    "surface": { "enum": ["desktop", "web"] },
+    "backend": { "enum": ["computer-use", "claude-in-chrome"] },
+    "app": { "type": "string", "description": "desktop 앱 식별자(있을 때)" },
+    "domain": { "type": "string", "description": "web 도메인(있을 때)" },
+    "target": { "type": "string", "description": "학습한 작업명(콘텐츠 아님)" },
+    "synthetic_only": { "const": true, "description": "합성 데이터 전용 — 항상 true" },
+    "send_boundary": {
+      "type": "object",
+      "required": ["agent_may_send", "stop_before_step_id"],
+      "properties": {
+        "agent_may_send": { "const": false },
+        "stop_before_step_id": {
+          "type": "string",
+          "description": "재생이 멈춰야 하는 발신 직전 step의 id. 임의 문자열이 아니라 steps[].id 중 하나를 참조해야 함(저장 전 검증: 미존재 id면 거부). 이 step 직전에서 정지하고 이후는 사람 전용"
+        }
+      },
+      "additionalProperties": false
+    },
+    "preconditions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "예: 테스트 계정 로그인됨, 합성 환자 선택됨"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "locator", "action", "assertion"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "description": "안정적 step 식별자. 산출물 내 유일(저장 전 중복 검증). send_boundary.stop_before_step_id가 이 값을 참조"
+          },
+          "locator": {
+            "type": "object",
+            "description": "우선순위: 안정 셀렉터 → 접근성 라벨 → 좌표(최후 폴백). 좌표는 라벨 의미검증이 불가하므로 전송 가능 영역에서는 금지(§6.2)",
+            "properties": {
+              "selector": { "type": "string" },
+              "a11y_label": { "type": "string" },
+              "coordinate": {
+                "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
+                "description": "최후 폴백 전용. 좌표만으로 식별되는 단계는 비권장. 전송류 UI(Send/보내기/제출/확인)에 도달 가능한 영역에서는 좌표 fallback 금지 — 셀렉터/라벨 필수"
+              }
+            },
+            "anyOf": [
+              { "required": ["selector"] },
+              { "required": ["a11y_label"] },
+              { "required": ["coordinate"] }
+            ]
+          },
+          "action": {
+            "enum": ["click", "type", "scroll", "wait", "assert_only"],
+            "description": "발신/전송류 action은 enum에 존재하지 않음(forbidden-send invariant). click도 실행 직전 전송 UI 의미검증을 통과해야 함(§6.2)"
+          },
+          "value_ref": {
+            "enum": ["from_mission_skill", "synthetic_fixture", "none"],
+            "description": "타이핑 값의 출처 키만 허용(자유 문자열 금지). action===type일 때만 from_mission_skill/synthetic_fixture 의미. 실제 값 리터럴은 산출물에 저장하지 않음(저장 전 PII lint로 강제, §6.3)"
+          },
+          "assertion": {
+            "type": "string",
+            "description": "단계 성공 판정 조건. 불충족 시 fail-closed 중단. 자유 문자열이지만 저장 전 PII lint 대상(§6.3)"
+          }
+        }
+      }
+    }
+  }
+}

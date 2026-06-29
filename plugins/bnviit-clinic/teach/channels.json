@@ -1,0 +1,56 @@
+{
+  "schema_note": "비앤빛 채널 연동학습(teach) 채널→표면→backend 매핑 정본. 설계 spec §4.1. 실제 도구 가용성·티어는 §4.2 capability probe로 런타임 확인한다(여기에 적힌 backend는 라우팅 기본값일 뿐, 항상 존재한다고 가정하지 않는다).",
+  "backends": {
+    "computer-use": "데스크톱 앱 UI 조작 학습(desktop). fail-closed executor가 step을 직접 구동하므로 자동 replay 지원.",
+    "claude-in-chrome": "웹 채널 UI 조작 학습(web). 1차 산출물은 Chrome 확장 shortcut. 자동 replay는 검증된 runtime 계약이 확인될 때만 지원(없으면 teach까지만, replay 미지원 §6.4)."
+  },
+  "channels": [
+    {
+      "channel": "카카오톡",
+      "aliases": ["kakaotalk", "kakao", "카톡"],
+      "surface": "desktop",
+      "backend": "computer-use",
+      "replay": "supported"
+    },
+    {
+      "channel": "WeChat",
+      "aliases": ["wechat", "위챗", "微信"],
+      "surface": "desktop-or-web",
+      "backend": "computer-use-or-claude-in-chrome",
+      "replay": "conditional",
+      "replay_note": "desktop이면 자동 replay 지원, web이면 §6.4 검증된 runtime 계약이 있을 때만."
+    },
+    {
+      "channel": "LINE",
+      "aliases": ["line", "라인"],
+      "surface": "desktop-or-web",
+      "backend": "computer-use-or-claude-in-chrome",
+      "replay": "conditional",
+      "replay_note": "desktop이면 자동 replay 지원, web이면 §6.4 검증된 runtime 계약이 있을 때만."
+    },
+    {
+      "channel": "Zalo",
+      "aliases": ["zalo", "잘로"],
+      "surface": "web",
+      "backend": "claude-in-chrome",
+      "replay": "conditional",
+      "replay_note": "web — §6.4 검증된 runtime 계약이 있을 때만 자동 replay, 없으면 teach까지만."
+    },
+    {
+      "channel": "인스타그램 DM",
+      "aliases": ["instagram", "instagram-dm", "insta", "인스타", "인스타 DM"],
+      "surface": "web",
+      "backend": "claude-in-chrome",
+      "replay": "conditional",
+      "replay_note": "web — §6.4 검증된 runtime 계약이 있을 때만 자동 replay, 없으면 teach까지만."
+    },
+    {
+      "channel": "네이버 톡톡",
+      "aliases": ["naver-talktalk", "talktalk", "톡톡"],
+      "surface": "web",
+      "backend": "claude-in-chrome",
+      "replay": "conditional",
+      "replay_note": "web — §6.4 검증된 runtime 계약이 있을 때만 자동 replay, 없으면 teach까지만."
+    }
+  ]
+}
