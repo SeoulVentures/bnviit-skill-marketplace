@@ -5,7 +5,7 @@ description: 비앤빛 지식 의미 검색 — "질문"을 로컬 RAG로 검색
 비앤빛 업무 지식을 의미 기반으로 검색한다. 결과는 출처(`source`, `heading`)와 함께 제시하며, 근거 부족 시 abstain한다.
 
 ```bash
-node plugins/bnviit-rag/skills/bnviit-memory/rag/query.mjs "질문" --root <프로젝트_루트> [--k N] [--type knowledge|agent|skill|sop] [--json]
+node "${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/query.mjs" "질문" --root <프로젝트_루트> [--k N] [--type knowledge|agent|skill|sop] [--json]
 ```
 
 옵션:

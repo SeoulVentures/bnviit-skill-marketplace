@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const EMBED_MODEL = process.env.RAG_EMBED_MODEL || 'Xenova/multilingual-e5-small';
-// revision(commit hash) 고정 — 재현성. 실제 hash는 구현 시 huggingface 모델 페이지에서 확정.
-export const EMBED_REVISION = process.env.RAG_EMBED_REVISION || 'main';
+// revision(commit hash) 고정 — 재현성. Xenova/multilingual-e5-small@main 2025-07-22 기준.
+export const EMBED_REVISION = process.env.RAG_EMBED_REVISION || '761b726dd34fb83930e26aab4e9ac3899aa1fa78';
 export const EMBED_DIM = Number(process.env.RAG_EMBED_DIM || 384);
 export const CHUNK_MAX_CHARS = Number(process.env.RAG_CHUNK_MAX_CHARS || 1200);
 export const CHUNK_OVERLAP = Number(process.env.RAG_CHUNK_OVERLAP || 150);

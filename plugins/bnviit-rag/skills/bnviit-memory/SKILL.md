@@ -86,7 +86,7 @@ description: >-
 ### ⑥ 색인 — ingest (자동·진행률)
 
 ```bash
-RAG_ALLOW_DOWNLOAD=1 node plugins/bnviit-rag/skills/bnviit-memory/rag/ingest.mjs --root <프로젝트_루트>
+RAG_ALLOW_DOWNLOAD=1 node "${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/ingest.mjs" --root <프로젝트_루트>
 ```
 
 **최초 색인은 `RAG_ALLOW_DOWNLOAD=1`이 필수다**(임베딩 모델 약 100MB 다운로드 허용). ingest가 미설정 시 자동 주입한다. 파일 단위 커밋으로 부분 진행을 보존하며, 중단 후 재실행 시 resume된다. 진행률과 결과(신규/갱신/스킵/삭제 카운트)를 출력한다.
@@ -137,10 +137,14 @@ RAG_ALLOW_DOWNLOAD=1 node plugins/bnviit-rag/skills/bnviit-memory/rag/ingest.mjs
 
 ## 도구 경로 참조
 
+모든 경로는 `${CLAUDE_PLUGIN_ROOT}` 기준이다. `${CLAUDE_PLUGIN_ROOT}`는 Claude Code가 커맨드·스킬 실행 시 플러그인 루트 절대경로로 확장하는 공식 변수로, 마켓플레이스 설치(`~/.claude/plugins/cache/`) 후에도 올바르게 동작한다.
+
 | 도구 | 경로 |
 |---|---|
-| ingest | `plugins/bnviit-rag/skills/bnviit-memory/rag/ingest.mjs` |
-| query | `plugins/bnviit-rag/skills/bnviit-memory/rag/query.mjs` |
-| status | `plugins/bnviit-rag/skills/bnviit-memory/rag/status.mjs` |
+| ingest | `${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/ingest.mjs` |
+| query | `${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/query.mjs` |
+| status | `${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/status.mjs` |
 
-경로 기준: 작업자 프로젝트 루트 또는 플러그인 설치 위치.
+**데이터 경로**: `.pgdata`(DB)와 `.cache`(모델 캐시)는 작업자 프로젝트(`--root` / `RAG_DATA_DIR` / `RAG_CACHE_DIR`)에 생성된다. `node_modules`는 플러그인 디렉터리(`${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/`)에 번들로 둔다.
+
+> **주의**: 최초 셋업(③)은 플러그인 디렉터리에 npm 의존성을 설치하므로 해당 경로에 쓰기 권한이 필요하다.
