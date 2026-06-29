@@ -1,11 +1,15 @@
 // RAG 질의 — 코사인 top-k 검색.
-// 사용: node query.mjs "질문" [--root <p>] [--data-dir <p>] [--cache-dir <p>] [--k 5] [--type <source_type>] [--json]
+// 사용: node query.mjs "질문" [--query-file <path>] [--root <p>] [--data-dir <p>] [--cache-dir <p>] [--k 5] [--type <source_type>] [--json]
+// 질의 전달(우선순위): argv 위치인자 > --query-file <path>(파일에서 읽음) > RAG_QUERY 환경변수.
+// --query-file·RAG_QUERY 경로는 질의가 셸 명령 문자열에 보간되지 않으므로 명령 주입이 불가능하다
+//   (argv-safe 실제 브리지). bnviit-ask.md는 $ARGUMENTS를 임시 파일로 저장 후 --query-file로 넘긴다.
+import { readFileSync } from 'node:fs';
 import { resolveRoot, resolveDataDir, resolveCacheDir } from './config.mjs';
 import { openDb, search } from './lib/db.mjs';
 import { embedOne } from './lib/embed.mjs';
 
 function parseArgs(argv) {
-  const args = { k: 5, type: null, json: false, root: undefined, dataDir: undefined, cacheDir: undefined, query: '' };
+  const args = { k: 5, type: null, json: false, root: undefined, dataDir: undefined, cacheDir: undefined, query: '', queryFile: undefined };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -14,10 +18,24 @@ function parseArgs(argv) {
     else if (a === '--root') args.root = argv[++i];
     else if (a === '--data-dir') args.dataDir = argv[++i];
     else if (a === '--cache-dir') args.cacheDir = argv[++i];
+    else if (a === '--query-file') args.queryFile = argv[++i];
     else if (a === '--json') args.json = true;
     else rest.push(a);
   }
-  args.query = rest.join(' ').trim();
+  // 질의 우선순위: argv 위치인자 → --query-file(파일 내용) → RAG_QUERY 환경변수.
+  // argv 우선이라 기존 query.smoke 테스트(위치인자 전달)는 영향 없음.
+  // --query-file·RAG_QUERY는 셸 미경유 안전 전달용(명령 주입 불가).
+  const argvQuery = rest.join(' ').trim();
+  let fileQuery = '';
+  if (args.queryFile) {
+    try {
+      fileQuery = readFileSync(args.queryFile, 'utf8').trim();
+    } catch (e) {
+      console.error(`--query-file 읽기 실패: ${args.queryFile} (${e.code ?? e.message})`);
+      process.exit(1);
+    }
+  }
+  args.query = argvQuery || fileQuery || (process.env.RAG_QUERY ?? '').trim();
   return args;
 }
 
@@ -29,7 +47,7 @@ function snippet(s, n = 280) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.query) {
-    console.error('사용법: node query.mjs "질문" [--root <p>] [--data-dir <p>] [--cache-dir <p>] [--k 5] [--type <source_type>] [--json]');
+    console.error('사용법: node query.mjs "질문" [--query-file <path>] [--root <p>] [--data-dir <p>] [--cache-dir <p>] [--k 5] [--type <source_type>] [--json]');
     process.exit(1);
   }
 

@@ -1,11 +1,11 @@
 {
   "name": "bnviit-clinic",
-  "description": "비앤빛 안과 운영을 돕는 Claude Cowork 스킬 모음",
-  "version": "0.1.0",
+  "description": "비앤빛 안과 임무 수행 스킬·에이전트 — 환자 FAQ 답변·수술후 케어·주간 PMO 보고 + 의료안전/PII 게이트(RAG 근거·fail-closed·HITL)",
+  "version": "0.2.0",
   "author": {
     "name": "SeoulVentures",
     "email": "erik@seoulventures.net"
   },
   "homepage": "https://github.com/SeoulVentures/bnviit-skill-marketplace",
-  "keywords": ["bnviit", "clinic", "ophthalmology", "cowork"]
+  "keywords": ["bnviit", "clinic", "ophthalmology", "cowork", "patient-faq", "medical-safety", "pii-masking", "postop-care", "pmo", "agents"]
 }

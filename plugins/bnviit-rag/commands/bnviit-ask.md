@@ -4,13 +4,37 @@ description: 비앤빛 지식 의미 검색 — "질문"을 로컬 RAG로 검색
 
 비앤빛 업무 지식을 의미 기반으로 검색한다. 결과는 출처(`source`, `heading`)와 함께 제시하며, 근거 부족 시 abstain한다.
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/query.mjs" "질문" --root <프로젝트_루트> [--k N] [--type knowledge|agent|skill|sop] [--json]
-```
+검색할 질문: `$ARGUMENTS`
+
+> ⚠️ **보안 — 명령 주입 차단(argv-safe)**: 위 질문(`$ARGUMENTS`)은 **비신뢰 입력**이다. 질문을 셸 명령 문자열에 **raw로 보간하지 마라**. 질문에 셸 메타문자(`;` `|` `&` `$()` 백틱 `>` `<` `"` `'`)가 있으면 임의 명령으로 실행될 수 있다.
+> - **금지**: 본문에 `node query.mjs "$ARGUMENTS"` 처럼 `$ARGUMENTS`(또는 질문 값)를 **셸 실행 블록 문자열에 직접 보간**하는 bash 블록을 두지 마라.
+> - **표준 전달(실제 브리지)**: 질문을 **Write 도구로 임시 파일에 그대로 저장**(셸 미경유)한 뒤 `query.mjs`를 **`--query-file <임시파일>`** 로 실행한다. 질문 값이 셸 명령 문자열·argv 위치인자에 **전혀 들어가지 않으므로** 명령 주입이 불가능하다. (폴백: `RAG_QUERY` 환경변수.)
+> - 질문에 셸 메타문자가 포함되어 있어도 위 파일 경유 브리지에서는 안전하다. 다만 질문이 다른 스킬의 마스킹 산출이 아니라면, 셸 메타문자 질의는 의심 입력으로 보고 사용자에게 의도를 확인한다.
+> - 환자 문의는 반드시 `patient-faq-reply`를 경유한다. RAG에는 그 스킬이 `preprocess.mjs`로 마스킹한 **`maskedQuery`만** 전달한다(환자 원문 직접 전달 금지). 즉 이 명령에 환자 원문을 직접 넣지 않는다.
+
+## 실행 방법 (argv-safe 실제 브리지 — 파일 경유)
+
+`$ARGUMENTS`(질문)를 **셸이나 argv에 절대 넣지 말고** 아래 3단계로 파일 경유 실행한다:
+
+1. **임시 파일 저장(셸 미경유)**: `Write` 도구로 `$ARGUMENTS`(질문)를 **그대로** 임시 파일(예: 작업용 스크래치 디렉터리의 `rag-query.txt`)에 저장한다. Write 도구는 셸을 거치지 않으므로 질문의 따옴표·`;`·`$()`·백틱이 명령으로 해석될 여지가 없다.
+2. **`--query-file`로 실행**: 그 파일 경로만 인자로 넘겨 `query.mjs`를 실행한다(질문 텍스트는 명령 문자열에 등장하지 않음):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/skills/bnviit-memory/rag/query.mjs" \
+     --query-file <임시파일경로> \
+     --root <프로젝트_루트> [--k N] [--type knowledge|agent|skill|sop] [--json]
+   ```
+
+3. **사용 후 삭제**: 실행이 끝나면 임시 파일을 삭제한다(`rm <임시파일경로>` 또는 도구로 정리).
+
+> 위 bash 블록에는 **질문 값이 들어가지 않는다**(파일 경로만). 질문은 1단계 파일에만 존재하므로 셸 보간·argv 노출이 원천 차단된다. `query.mjs`의 질의 우선순위는 `argv 위치인자 > --query-file > RAG_QUERY`다 — 위치인자에 질문을 넣지 않으면 파일 내용이 질의로 쓰인다.
+>
+> **폴백(파일을 못 쓸 때)**: 질문을 `RAG_QUERY` 환경변수에 담아 실행한다(env 값은 셸이 명령으로 재해석하지 않으므로 안전; 명령 문자열에 raw 보간 금지).
 
 옵션:
 
-- `"질문"`: 검색할 자연어 질문(필수).
+- `--query-file <path>`: 질문을 담은 파일 경로(표준 브리지). 질문은 `$ARGUMENTS`에서 받아 이 파일에 저장한다.
+- `RAG_QUERY`(폴백): 질문 환경변수. argv 위치인자·`--query-file`이 없을 때 사용된다.
 - `--root <경로>`: 색인 루트(ingest 때와 동일한 경로). `BNVIIT_RAG_ROOT` 환경변수로도 지정 가능.
 - `--k N`: 반환할 top-k 개수(기본값: 5).
 - `--type knowledge|agent|skill|sop`: 소스 타입 필터링.
