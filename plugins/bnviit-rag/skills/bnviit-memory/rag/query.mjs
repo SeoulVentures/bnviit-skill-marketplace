@@ -1,16 +1,19 @@
 // RAG 질의 — 코사인 top-k 검색.
-// 사용: node query.mjs "질문" [--k 5] [--type repo|cowork-memory] [--json]
-import { DATA_DIR } from './config.mjs';
+// 사용: node query.mjs "질문" [--root <p>] [--data-dir <p>] [--cache-dir <p>] [--k 5] [--type <source_type>] [--json]
+import { resolveRoot, resolveDataDir, resolveCacheDir } from './config.mjs';
 import { openDb, search } from './lib/db.mjs';
 import { embedOne } from './lib/embed.mjs';
 
 function parseArgs(argv) {
-  const args = { k: 5, type: null, json: false, query: '' };
+  const args = { k: 5, type: null, json: false, root: undefined, dataDir: undefined, cacheDir: undefined, query: '' };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--k') args.k = Number(argv[++i]);
     else if (a === '--type') args.type = argv[++i];
+    else if (a === '--root') args.root = argv[++i];
+    else if (a === '--data-dir') args.dataDir = argv[++i];
+    else if (a === '--cache-dir') args.cacheDir = argv[++i];
     else if (a === '--json') args.json = true;
     else rest.push(a);
   }
@@ -26,17 +29,32 @@ function snippet(s, n = 280) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.query) {
-    console.error('사용법: node query.mjs "질문" [--k 5] [--type repo|cowork-memory] [--json]');
+    console.error('사용법: node query.mjs "질문" [--root <p>] [--data-dir <p>] [--cache-dir <p>] [--k 5] [--type <source_type>] [--json]');
     process.exit(1);
   }
 
-  const db = await openDb(DATA_DIR);
+  // R3: openDb 전에 경로 계산·주입 — embed가 번들 .cache로 폴백하지 않도록(캐시 온리 질의 성공 보장).
+  const root = resolveRoot({ cliArg: args.root });
+  const dataDir = resolveDataDir({ cliDataDir: args.dataDir, root });
+  const cacheDir = resolveCacheDir({ cliCacheDir: args.cacheDir, root });
+  process.env.RAG_CACHE_DIR = cacheDir;
+
+  const db = await openDb(dataDir);
   const qvec = await embedOne(args.query, 'query');
   const rows = await search(db, qvec, { k: args.k, sourceType: args.type });
   await db.close();
 
   if (args.json) {
-    console.log(JSON.stringify(rows, null, 2));
+    // R2#5: 명시 6키만 직렬화 — embedding 등 누수 방지.
+    const out = rows.map((r) => ({
+      source: r.source,
+      source_type: r.source_type,
+      heading: r.heading,
+      chunk_index: r.chunk_index,
+      similarity: r.similarity,
+      content: r.content,
+    }));
+    console.log(JSON.stringify(out, null, 2));
     return;
   }
 
