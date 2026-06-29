@@ -1,0 +1,7 @@
+node_modules/
+.pgdata/
+.pgdata-*/
+.cache/
+.models/
+*.log
+_test-*.mjs

@@ -1,0 +1,9 @@
+{
+  "name": "bnviit-rag",
+  "description": "비앤빛 안과 전용 로컬 RAG 셋업 스킬 — PGlite+pgvector, 로컬 e5 임베딩(외부 송출 0)",
+  "version": "0.1.0",
+  "author": { "name": "SeoulVentures", "email": "erik@seoulventures.net" },
+  "homepage": "https://github.com/SeoulVentures/bnviit-skill-marketplace",
+  "license": "MIT",
+  "keywords": ["bnviit", "rag", "pglite", "pgvector", "memory"]
+}

@@ -13,6 +13,11 @@
       "name": "bnviit-clinic",
       "source": "./plugins/bnviit-clinic",
       "description": "비앤빛 안과 운영을 돕는 Claude Cowork 스킬 모음 (예시 플러그인)"
+    },
+    {
+      "name": "bnviit-rag",
+      "source": "./plugins/bnviit-rag",
+      "description": "비앤빛 안과 전용 로컬 RAG 셋업 스킬 (PGlite+pgvector, 로컬 임베딩)"
     }
   ]
 }
