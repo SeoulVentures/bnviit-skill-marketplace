@@ -2,3 +2,9 @@
 node_modules/
 *.log
 .claude/settings.local.json
+
+# 기밀 — 내부 배경 지식 인덱스 (절대 커밋/푸시 금지)
+knowledge/
+
+# SDD 진행 ledger (로컬 scratch)
+.superpowers/

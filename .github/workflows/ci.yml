@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 동일 ref의 이전 실행은 취소(자원 절약)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # bnviit-rag RAG 도구 — 모델 불필요 단위 테스트를 OS×Node 매트릭스로
+  rag-unit:
+    name: rag-unit (${{ matrix.os }} / node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: plugins/bnviit-rag/skills/bnviit-memory/rag
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: plugins/bnviit-rag/skills/bnviit-memory/rag/package-lock.json
+      - name: Install deps (npm ci, lockfile 기준)
+        run: npm ci
+      # 모델 가중치 다운로드가 필요 없는 단위 테스트만 실행한다.
+      # (실모델 smoke: ingest/query/roundtrip/status — ~100MB 다운로드·네트워크 의존이라 CI 제외, 로컬/nightly에서 검증)
+      - name: Unit tests (model-free)
+        run: >-
+          node --test
+          lib/config.test.mjs
+          lib/sources.test.mjs
+          lib/embed.test.mjs
+          lib/db.test.mjs
+          lib/stats.test.mjs
+          lib/lock.test.mjs
+          lib/guard.test.mjs
+
+  # 플러그인 메타데이터·문서 테스트(외부 의존성 불필요)
+  plugin-docs:
+    name: plugin-docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Scaffold + docs tests
+        run: >-
+          node --test
+          plugins/bnviit-rag/test/scaffold.test.mjs
+          plugins/bnviit-rag/test/docs.test.mjs
+
+  # 마켓플레이스/플러그인 JSON 유효성(빠른 게이트)
+  json-validate:
+    name: json-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate marketplace + plugin manifests
+        run: |
+          python3 -c "import json,sys; json.load(open('.claude-plugin/marketplace.json')); json.load(open('plugins/bnviit-rag/.claude-plugin/plugin.json')); json.load(open('plugins/bnviit-clinic/.claude-plugin/plugin.json')); print('manifests OK')"

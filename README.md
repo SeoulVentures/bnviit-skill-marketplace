@@ -3,6 +3,16 @@
 비앤빛 안과(BNVIIT)의 **Claude Cowork**를 위한 스킬 마켓플레이스입니다.
 운영·상담·마케팅 등 병원 업무를 돕는 Claude Code 스킬을 플러그인 형태로 모아 배포합니다.
 
+## 비앤빛 RAG 메모리 설치 (bnviit-rag)
+
+비앤빛 안과 업무 지식을 로컬 RAG로 색인해 의미 검색을 제공하는 플러그인입니다.
+
+1단계: `/plugin install bnviit-rag@bnviit-skill-marketplace`
+
+2단계: `/bnviit-setup` (또는 "비앤빛안과를 위한 스킬을 설치하라")
+
+---
+
 ## 마켓플레이스 추가하기
 
 Claude Code에서 아래 명령으로 이 마켓플레이스를 등록합니다.
