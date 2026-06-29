@@ -1,5 +1,7 @@
 // RAG 질의 — 코사인 top-k 검색.
 // 사용: node query.mjs "질문" [--root <p>] [--data-dir <p>] [--cache-dir <p>] [--k 5] [--type <source_type>] [--json]
+// 질의는 argv 위치인자 또는 RAG_QUERY 환경변수로 전달한다(argv 우선). 환경변수 경로는
+// 셸 메타문자가 명령 문자열에 보간되지 않도록 하는 안전 전달용이다(bnviit-ask.md 참조).
 import { resolveRoot, resolveDataDir, resolveCacheDir } from './config.mjs';
 import { openDb, search } from './lib/db.mjs';
 import { embedOne } from './lib/embed.mjs';
@@ -17,7 +19,11 @@ function parseArgs(argv) {
     else if (a === '--json') args.json = true;
     else rest.push(a);
   }
-  args.query = rest.join(' ').trim();
+  // 질의 우선순위: argv 위치인자 → RAG_QUERY 환경변수(셸-안전 경로).
+  // argv 우선이라 기존 query.smoke 테스트(위치인자 전달)는 영향 없음.
+  // 환경변수 경로는 bnviit-ask.md 등 셸 메타문자 안전 전달을 위한 것.
+  const argvQuery = rest.join(' ').trim();
+  args.query = argvQuery || (process.env.RAG_QUERY ?? '').trim();
   return args;
 }
 

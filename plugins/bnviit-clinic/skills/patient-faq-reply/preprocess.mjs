@@ -35,6 +35,13 @@ const PII_RULES = [
   { type: 'rrn', re: /\b\d{6}-\d{7}\b/g, mask: '[주민번호]' },
   // 이메일.
   { type: 'email', re: /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, mask: '[이메일]' },
+  // 국제전화(+82) — 한국 번호 국제표기. phone 규칙보다 먼저(선두 0 제거형 매칭).
+  // 예: +82-10-1234-5678, +82 10 1234 5678, +821012345678.
+  {
+    type: 'phone_intl',
+    re: /\+82[-.\s]?\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}\b/g,
+    mask: '[전화번호]',
+  },
   // 전화번호: 02/0xx-xxx(x)-xxxx, 휴대폰 010 등. 하이픈/공백/점 구분 허용.
   {
     type: 'phone',
@@ -43,11 +50,26 @@ const PII_RULES = [
   },
   // 카드/계좌 유사 장수열(13자리 이상 연속 숫자) — 금융정보 보수적 마스킹.
   { type: 'long_number', re: /\b\d{13,}\b/g, mask: '[숫자]' },
-  // 생년월일(YYYY-MM-DD / YYYY.MM.DD / YYYY년 MM월 DD일).
+  // 8자리 생년월일(YYYYMMDD) — 구분자 없는 형식. rrn(하이픈 포함) 이후 평가.
+  // 19/20 세기 + 01~12월 + 01~31일 보수적 매칭(임의 8자리 숫자 오탐 최소화).
+  {
+    type: 'dob',
+    re: /\b(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\b/g,
+    mask: '[생년월일]',
+  },
+  // 생년월일(YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD / YYYY년 MM월 DD일).
   {
     type: 'dob',
     re: /\b(19|20)\d{2}[-.\s/]\d{1,2}[-.\s/]\d{1,2}\b|\b(19|20)\d{2}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일/g,
     mask: '[생년월일]',
+  },
+  // 한국 주소(보수적): 시/도 또는 시·구·동 뒤에 번지(숫자-숫자) 또는 '번지/로/길 + 숫자'.
+  // 비정형 주소는 100% 못 잡으므로 표지어 잔존 검사(hasResidualPii)로 fail-closed 보완.
+  // 예: "서울특별시 강남구 역삼동 123-45", "경기도 ... 12번길 3".
+  {
+    type: 'address',
+    re: /(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별시|광역시|특별자치시|특별자치도|도)?\s*\S*?(?:시|군|구)\s*\S*?(?:동|읍|면|로|길)\s*\d{1,4}(?:[-]\d{1,4})?(?:번지|번길|호)?/g,
+    mask: '[주소]',
   },
 ];
 
@@ -62,12 +84,21 @@ const NAME_CONTACT_RE = new RegExp(
   '(^|[\\s,。.(（])' +
     // (2) 안내어가 아닌 2~4 한글 성명.
     `(?!${CONTACT_WORDS})([가-힣]{2,4})` +
-    // (3) 선택: 호칭(님/씨).
-    '(?:님|씨)?\\s*' +
-    // (4) 선택: 안내어 + 구분자.
-    `(?:${CONTACT_WORDS})?\\s*[:：]?\\s*` +
-    // (5) 직후 전화번호(원형 또는 마스킹 토큰)가 와야 성명으로 확정.
-    '(?=(?:\\[전화번호\\]|0\\d{1,2}[-.\\s]?\\d{3,4}))',
+    // (3) 호칭/안내어/구분자/공백을 캡처(group3) — 마스킹 시 공백 보존용.
+    `((?:님|씨)?\\s*(?:${CONTACT_WORDS})?\\s*[:：]?\\s*)` +
+    // (4) 직후 전화번호(원형 또는 마스킹 토큰)가 와야 성명으로 확정.
+    '(?=(?:\\[전화번호\\]|0\\d{1,2}[-.\\s]?\\d{3,4}|\\+82))',
+  'g',
+);
+
+// 이름+표지어(님/환자) 조합: "홍길동님", "김환자 환자분" 등 성명 뒤 환자/호칭 표지어.
+// 연락처 동반 없이도 성명 표지어가 명시되면 보수적으로 성명 토큰을 마스킹한다.
+// - 안내어(연락처·전화 등)는 성명에서 제외, 흔한 비-성명 2글자 보통명사는 부정 선행으로 일부 차단.
+const NAME_MARKER_RE = new RegExp(
+  '(^|[\\s,。.(（])' +
+    `(?!${CONTACT_WORDS})(?!환자|보호자|고객|선생|원장|의사)([가-힣]{2,4})` +
+    // 표지어: 님/씨 + (선택)환자/보호자/고객, 또는 직접 '환자/보호자'.
+    '(?=(?:님|씨)\\s*(?:환자|보호자|고객)?|\\s*(?:환자분|환자|보호자분))',
   'g',
 );
 
@@ -90,6 +121,13 @@ const EMERGENCY_PATTERNS = [
   /심한\s*두통.*(?:시각|시야|눈)|(?:시각|시야|눈).*심한\s*두통/,
   /(?:화학|약품|세제).*(?:눈|안구)|(?:눈|안구).*(?:화학|약품)/,
   /(?:눈|안구).*(?:찔|찔렸|찔림|박혀|이물질|관통)/,
+  // 통증 역순/구어 표현: "눈이 너무 아파요", "눈이 심하게 아파요"(부사+아프다).
+  /(?:눈|안구)(?:이|가)?\s*(?:너무|많이|엄청|매우|심하게|심히)\s*아(?:파|프|픔)/,
+  // 출혈 동의어/구어: "눈에서 피가 나요/난다", "피나요".
+  /(?:눈|안구).*피\s*(?:가|를)?\s*(?:나|난|남|흘)/,
+  /피\s*(?:가|를)?\s*나(?:요|와|온|는)/,
+  // 급성 시력저하 구어: "안 보여요", "갑자기 안 보임", "하나도 안 보".
+  /(?:갑자기|급|확|하나도)?\s*안\s*보(?:여|임|이|인|일)/,
 ];
 
 /**
@@ -121,8 +159,17 @@ export function maskPii(text) {
     found.add('name_contact');
   }
   NAME_CONTACT_RE.lastIndex = 0;
-  // 그룹1(선행 경계문자)은 보존하고 성명 토큰만 치환한다.
-  masked = masked.replace(NAME_CONTACT_RE, (_m, lead) => `${lead ?? ''}[이름]`);
+  // 그룹1(선행 경계문자)·그룹3(중간 호칭/안내어/구분자)은 보존하고 성명 토큰만 치환.
+  // 중간 세그먼트(group3)의 공백을 유지해 "[이름] 010-..."처럼 단어 경계를 보존한다.
+  masked = masked.replace(NAME_CONTACT_RE, (_m, lead, _name, mid) => `${lead ?? ''}[이름]${mid ?? ''}`);
+
+  // 이름+표지어(님/환자 등) — 연락처 동반 없이도 성명 표지어가 명시되면 마스킹.
+  NAME_MARKER_RE.lastIndex = 0;
+  if (NAME_MARKER_RE.test(masked)) {
+    found.add('name_marker');
+  }
+  NAME_MARKER_RE.lastIndex = 0;
+  masked = masked.replace(NAME_MARKER_RE, (_m, lead) => `${lead ?? ''}[이름]`);
 
   for (const rule of PII_RULES) {
     rule.re.lastIndex = 0;
@@ -134,6 +181,29 @@ export function maskPii(text) {
   }
 
   return { masked, foundTypes: [...found] };
+}
+
+/**
+ * RAG 검색 결과 출력단 마스킹(§6.4 양방향 마스킹·전 필드).
+ * 검색 결과 객체의 `content`·`source`·`heading` 각 필드에 결정론적 maskPii를 적용한다.
+ * - content만 마스킹하면 파일명(source)·제목(heading)의 타 환자 식별정보가 샌다 → 전 필드.
+ * - 결정론적(비-LLM)이며 throw하지 않는다. 문자열 필드만 마스킹하고 나머지는 보존한다.
+ * @param {Record<string, unknown>} obj  검색 결과 한 행(또는 임의 객체)
+ * @returns {{ masked: Record<string, unknown>, foundTypes: string[] }}
+ */
+export function maskFields(obj) {
+  const found = new Set();
+  const src = obj && typeof obj === 'object' ? obj : {};
+  const out = { ...src };
+  for (const field of ['content', 'source', 'heading']) {
+    const v = src[field];
+    if (typeof v === 'string' && v.length > 0) {
+      const { masked, foundTypes } = maskPii(v);
+      out[field] = masked;
+      for (const t of foundTypes) found.add(t);
+    }
+  }
+  return { masked: out, foundTypes: [...found] };
 }
 
 /**
@@ -189,14 +259,32 @@ export function processInput(rawText, opts = {}) {
   return envelope('ok', maskResult.masked, emergency, maskResult.foundTypes, null);
 }
 
-// 마스킹 후 잔존 PII(주민번호·이메일·전화 시그니처)가 남았는지 보수적 점검.
+// 마스킹 후 잔존 PII가 남았는지 보수적 점검(fail-closed 트리거).
+// (1) 명백한 PII 시그니처(주민번호·이메일·전화) 잔존.
+// (2) PII 표지어(주민번호/생년월일/연락처/전화/주소 등) + 인접 숫자/고유명사 의심 잔존.
+//     비정형 PII는 정규식으로 100% 못 잡으므로, 표지어가 남고 그 부근에 마스킹되지 않은
+//     숫자열·한글 고유명사 의심이 있으면 불완전(uncertain)으로 보수 판정한다.
 function hasResidualPii(masked) {
-  const residual = [
+  const residualSignature = [
     /\b\d{6}-\d{7}\b/,
     /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/,
     /\b0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}\b/,
   ];
-  return residual.some((re) => re.test(masked));
+  if (residualSignature.some((re) => re.test(masked))) return true;
+
+  // 표지어 + 인접(같은 줄·근접) 마스킹 안 된 숫자(3자리 이상) 또는 주소형 토막.
+  // 이미 [주민번호]·[전화번호]·[주소] 등으로 치환된 표지어 부근은 마스킹 토큰이라 제외.
+  const LABEL = '(?:주민\\s*등록\\s*번호|주민\\s*번호|생년\\s*월일|생일|연락처|전화\\s*번호|전화|핸드폰|휴대폰|주소)';
+  // 표지어 직후 구분자(:·는·은·이·가·)·공백) 후 마스킹 토큰이 아닌 숫자열(3+) 잔존.
+  const labelWithDigits = new RegExp(
+    LABEL + '\\s*(?:[:：]|은|는|이|가|=|\\s)?\\s*(?!\\[)[^\\[\\]\\n]{0,6}\\d{3,}',
+  );
+  if (labelWithDigits.test(masked)) return true;
+  // 주소 표지어 + 행정구역 표지(동/읍/면/로/길/번지/호)가 마스킹 토큰 밖에 잔존.
+  const addrResidual = /주소\s*(?:[:：]|은|는|이|가|=)?\s*(?!\[)[^\[\]\n]{0,12}?(?:동|읍|면|로|길|번지|호)(?:\s|\d|$|[^가-힣])/;
+  if (addrResidual.test(masked)) return true;
+
+  return false;
 }
 
 // envelope 빌더 — 키 순서/형태 고정, 비정상 상태 원문 누출 방지 불변식 강제.

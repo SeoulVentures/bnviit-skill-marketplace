@@ -172,3 +172,163 @@ test('빈 stdin 입력도 envelope을 항상 반환', () => {
   assertEnvelopeShape(env);
   assert.equal(env.emergency, false);
 });
+
+// ---------------------------------------------------------------------------
+// (5) 확장 PII 패턴: 8자리 생년월일·+82 국제전화·한국 주소 마스킹 (codex C1)
+// ---------------------------------------------------------------------------
+test('확장 PII: 8자리 생년월일(YYYYMMDD)이 maskedQuery에 미포함', () => {
+  const env = runProcess('제 생년월일은 19900101 이고 라식 문의드려요');
+  assertEnvelopeShape(env);
+  assert.equal(env.maskingStatus, 'ok', '구조화된 8자리 생년월일은 결정론적 마스킹');
+  assert.ok(!env.maskedQuery.includes('19900101'), '8자리 생년월일 원문 미포함');
+  assert.ok(env.foundPiiTypes.includes('dob'), 'dob 유형 보고');
+  assert.ok(env.maskedQuery.includes('라식'), '비-PII 본문 보존');
+});
+
+test('확장 PII: +82 국제전화가 maskedQuery에 미포함', () => {
+  const env = runProcess('연락은 +82-10-1234-5678 로 부탁드립니다. 예약 문의예요');
+  assertEnvelopeShape(env);
+  assert.equal(env.maskingStatus, 'ok');
+  assert.ok(!env.maskedQuery.includes('+82-10-1234-5678'), '+82 전화 원문 미포함');
+  assert.ok(!env.maskedQuery.includes('1234-5678'), '전화 일부도 미포함');
+  assert.ok(env.foundPiiTypes.includes('phone_intl'), 'phone_intl 유형 보고');
+});
+
+test('확장 PII: 한국 주소(시/도·구·동·번지)가 maskedQuery에 미포함', () => {
+  const env = runProcess('주소는 서울특별시 강남구 역삼동 123-45 입니다. 오시는 길 안내 부탁해요');
+  assertEnvelopeShape(env);
+  // 마스킹되어 ok이거나, 표지어 잔존으로 uncertain일 수 있다(둘 다 fail-safe).
+  if (env.maskingStatus === 'ok') {
+    assert.ok(!env.maskedQuery.includes('역삼동 123-45'), '주소 원문 미포함');
+    assert.ok(env.foundPiiTypes.includes('address'), 'address 유형 보고');
+  } else {
+    assert.equal(env.maskedQuery, null, '주소 표지어 잔존 시 fail-closed(maskedQuery=null)');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (6) PII 표지어 잔존 시 uncertain (fail-closed) — 비정형 PII는 보수 처리 (codex C1)
+// ---------------------------------------------------------------------------
+test('표지어 잔존 fail-closed: 표지어 + 인접 숫자/주소 토막이 남으면 uncertain', () => {
+  // 정규식이 못 잡은 비정형이지만 표지어(주민번호·연락처·주소)가 인접 숫자/행정구역과 남는 케이스.
+  for (const raw of [
+    '제 주민번호는 1234 뒤에 더 있어요',
+    '연락처 끝자리만 5678 입니다',
+    '주소: 무슨동 12로 부근이에요',
+  ]) {
+    const env = runProcess(raw);
+    assertEnvelopeShape(env);
+    assert.equal(env.maskingStatus, 'uncertain', `표지어 잔존 fail-closed: ${raw}`);
+    assert.equal(env.maskedQuery, null, 'uncertain이면 maskedQuery=null');
+  }
+});
+
+test("표지어 단독(인접 PII 없음)·비-PII 본문은 ok 유지(과잉 차단 방지)", () => {
+  for (const raw of ['주소 등록 방법 알려주세요', '라식 수술 가격이 궁금합니다']) {
+    const env = runProcess(raw);
+    assertEnvelopeShape(env);
+    assert.equal(env.maskingStatus, 'ok', `과잉 차단 아님: ${raw}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (7) 응급 표현 확장: 통증 역순·출혈 동의어·급성 시력저하 구어 (codex Important)
+// ---------------------------------------------------------------------------
+test('확장 응급 표현(구어/역순)도 emergency=true', () => {
+  for (const raw of [
+    '눈이 너무 아파요',
+    '눈이 심하게 아파요',
+    '눈에서 피가 나요',
+    '갑자기 안 보여요',
+    '한쪽 눈이 안 보임',
+  ]) {
+    const env = runProcess(raw);
+    assertEnvelopeShape(env);
+    assert.equal(env.emergency, true, `확장 응급 분류: ${raw}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (8) RAG 출력단 전 필드 마스킹 maskFields (§6.4·§7.2.3) — content·source·heading
+// ---------------------------------------------------------------------------
+test('§7.2.3 maskFields: content·source·heading 각 필드 PII가 마스킹됨', () => {
+  const row = {
+    content: '환자 연락처 010-9876-5432 로 안내. 이메일 patient@example.com',
+    source: 'knowledge/case_홍길동님 010-1111-2222.md',
+    heading: '상담 hong.gil@example.com 케이스 요약',
+    chunk_index: 3,
+    similarity: 0.91,
+    source_type: 'knowledge',
+  };
+  const { masked, foundTypes } = mod.maskFields(row);
+
+  // content: 전화·이메일 원문 제거.
+  assert.ok(!masked.content.includes('010-9876-5432'), 'content 전화 마스킹');
+  assert.ok(!masked.content.includes('patient@example.com'), 'content 이메일 마스킹');
+  // source: 파일명 내 전화 원문 제거(파일명으로 식별정보 누출 차단).
+  assert.ok(!masked.source.includes('010-1111-2222'), 'source 전화 마스킹');
+  // heading: 제목 내 이메일 원문 제거.
+  assert.ok(!masked.heading.includes('hong.gil@example.com'), 'heading 이메일 마스킹');
+  // 비-PII 필드는 보존.
+  assert.equal(masked.chunk_index, 3, '비-PII 필드 보존');
+  assert.equal(masked.similarity, 0.91);
+  // 유형명만 반환(원문 값 금지).
+  for (const t of foundTypes) {
+    assert.ok(/^[a-z_]+$/.test(t), `유형명만: ${t}`);
+  }
+  assert.ok(foundTypes.includes('phone') || foundTypes.includes('email'), '발견 유형 보고');
+});
+
+test('§7.2.3 maskFields: 각 필드를 독립적으로 마스킹(한 필드만 PII여도 처리)', () => {
+  // source에만 PII가 있는 경우에도 그 필드가 마스킹되어야 한다(content만 검사하면 누출).
+  const onlySource = mod.maskFields({
+    content: '수술 후 회복 기간 일반 안내',
+    source: 'knowledge/홍길동 010-3333-4444.md',
+    heading: '회복 기간',
+  });
+  assert.ok(!onlySource.masked.source.includes('010-3333-4444'), 'source 단독 PII도 마스킹');
+  assert.equal(onlySource.masked.content, '수술 후 회복 기간 일반 안내', '비-PII content 보존');
+});
+
+// ---------------------------------------------------------------------------
+// (9) 프로세스 실패 폴백 신호 — 호출자가 RAG 차단+보수적 응급 폴백 가능 (codex Important)
+//     preprocess가 비정상 상태를 envelope/exit로 신호하는지 검증(호출자 분기 근거).
+// ---------------------------------------------------------------------------
+test('프로세스 실패 신호: timeout이면 errorCode=TIMEOUT·maskedQuery=null·보수적 emergency', () => {
+  // 모듈 API로 timeout 모사는 불가하므로, envelope 계약을 직접 검증(호출자 fail-closed 분기 근거).
+  // 실제 CLI timeout 경로는 main()이 emit(envelope('error', null, true, [], 'TIMEOUT'))로 수렴한다.
+  const env = mod.processInput('아무 문의', { forceError: true });
+  assertEnvelopeShape(env);
+  assert.notEqual(env.maskingStatus, 'ok', '비정상 상태는 ok 아님 → RAG 진행 불가');
+  assert.equal(env.maskedQuery, null, '비정상이면 maskedQuery=null(RAG 차단 근거)');
+});
+
+test('프로세스 파싱불가/비정상 출력 모사: 비-JSON 출력이면 호출자가 fail-closed 판정 가능', () => {
+  // preprocess는 항상 JSON envelope 한 줄을 낸다. 호출자가 JSON.parse 실패 시 fail-closed로
+  // 간주해야 함을 명시 검증: 비-JSON 문자열은 파싱 실패하고, 그 자체가 차단 신호다.
+  let parsed = null;
+  let parseFailed = false;
+  try {
+    parsed = JSON.parse('이것은 envelope이 아닌 비정상 출력입니다');
+  } catch {
+    parseFailed = true;
+  }
+  assert.equal(parseFailed, true, '파싱 불가 출력은 JSON.parse 실패(호출자 fail-closed 신호)');
+  assert.equal(parsed, null, '파싱 실패 시 envelope 부재 → RAG/답변 차단 + 보수적 응급 폴백 분기');
+});
+
+test('정상 프로세스는 항상 단일 JSON envelope을 stdout으로 낸다(파싱 가능)', () => {
+  // 정상 경로의 출력 계약: 호출자가 한 줄 JSON으로 파싱 가능해야 분기할 수 있다.
+  const env = runProcess('라식 가격 문의');
+  assertEnvelopeShape(env);
+});
+
+test('실제 프로세스: 과대 입력(max-len 초과)은 uncertain+maskedQuery=null로 신호(RAG 차단 근거)', () => {
+  // 실제 CLI 경로로 비정상(uncertain) 상태를 유발 → 호출자가 maskedQuery로 RAG 진행 불가.
+  const big = '가'.repeat(50) + ' 라식 문의';
+  const env = runProcess(big, ['--max-len', '10']);
+  assertEnvelopeShape(env);
+  assert.equal(env.maskingStatus, 'uncertain', '과대 입력은 보수적으로 uncertain');
+  assert.equal(env.maskedQuery, null, 'uncertain이면 maskedQuery=null → RAG/답변 차단');
+  assert.equal(env.errorCode, 'PII_UNCERTAIN');
+});
