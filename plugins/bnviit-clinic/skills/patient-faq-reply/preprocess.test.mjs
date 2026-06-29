@@ -207,6 +207,40 @@ test('확장 PII: 한국 주소(시/도·구·동·번지)가 maskedQuery에 미
 });
 
 // ---------------------------------------------------------------------------
+// (5b) 표지어 없는 PII 강화: 행정구역+번지 주소·이름 소개 맥락 (재리뷰 item 2)
+// ---------------------------------------------------------------------------
+test('표지어 없는 주소: 행정구역+번지(강남구 역삼동 123-45)가 마스킹됨', () => {
+  const env = runProcess('강남구 역삼동 123-45 로 와주시면 됩니다. 주차 가능한가요?');
+  assertEnvelopeShape(env);
+  // 표지어("주소") 없이도 행정구역+번지 조합을 마스킹한다.
+  if (env.maskingStatus === 'ok') {
+    assert.ok(!env.maskedQuery.includes('역삼동 123-45'), '주소 원문 미포함');
+    assert.ok(env.maskedQuery.includes('[주소]'), '주소 마스킹 토큰 존재');
+    assert.ok(env.foundPiiTypes.includes('address'), 'address 유형 보고');
+  } else {
+    assert.equal(env.maskedQuery, null, '잔존 시 fail-closed(maskedQuery=null)');
+  }
+});
+
+test('이름 소개 맥락: "저는 홍길동이고"·"제 이름은 김철수"의 성명이 마스킹됨', () => {
+  for (const [raw, name] of [
+    ['저는 홍길동이고 라식 문의드려요', '홍길동'],
+    ['제 이름은 김철수입니다. 예약 가능한가요?', '김철수'],
+    ['환자명 이몽룡 수술 일정 문의', '이몽룡'],
+  ]) {
+    const env = runProcess(raw);
+    assertEnvelopeShape(env);
+    if (env.maskingStatus === 'ok') {
+      assert.ok(!env.maskedQuery.includes(name), `소개 맥락 성명 미포함: ${name}`);
+      assert.ok(env.maskedQuery.includes('[이름]'), '이름 마스킹 토큰 존재');
+      assert.ok(env.foundPiiTypes.includes('name_intro'), 'name_intro 유형 보고');
+    } else {
+      assert.equal(env.maskedQuery, null, '잔존 시 fail-closed');
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
 // (6) PII 표지어 잔존 시 uncertain (fail-closed) — 비정형 PII는 보수 처리 (codex C1)
 // ---------------------------------------------------------------------------
 test('표지어 잔존 fail-closed: 표지어 + 인접 숫자/주소 토막이 남으면 uncertain', () => {
@@ -288,6 +322,22 @@ test('§7.2.3 maskFields: 각 필드를 독립적으로 마스킹(한 필드만 
   });
   assert.ok(!onlySource.masked.source.includes('010-3333-4444'), 'source 단독 PII도 마스킹');
   assert.equal(onlySource.masked.content, '수술 후 회복 기간 일반 안내', '비-PII content 보존');
+  // 명백 PII 정상 마스킹 → residualRisk false.
+  assert.equal(onlySource.residualRisk, false, '정상 마스킹 시 residualRisk false');
+});
+
+test('§7.2.3 maskFields fail-closed: 잔존 위험 필드는 차폐+residualRisk true (재리뷰 item 3)', () => {
+  // 표지어+부분숫자(연락처 끝자리)·비정형 주소가 남으면 residualRisk로 신호하고 필드를 차폐한다.
+  const risky = mod.maskFields({
+    content: '연락처 끝자리 5678 입니다',
+    source: 'knowledge/주소 무슨동 12로 인근.md',
+    heading: '일반 안내',
+  });
+  assert.equal(risky.residualRisk, true, '잔존 위험 시 residualRisk true');
+  assert.ok(Array.isArray(risky.residualFields) && risky.residualFields.length > 0, 'residualFields 보고');
+  // 잔존 위험 필드는 부분 원문이 남지 않게 차폐된다.
+  assert.ok(!risky.masked.content.includes('5678'), 'content 부분숫자 미잔류(차폐)');
+  assert.ok(!risky.masked.source.includes('무슨동 12로'), 'source 비정형 주소 미잔류(차폐)');
 });
 
 // ---------------------------------------------------------------------------

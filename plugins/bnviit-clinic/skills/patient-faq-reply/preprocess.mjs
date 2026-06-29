@@ -63,7 +63,7 @@ const PII_RULES = [
     re: /\b(19|20)\d{2}[-.\s/]\d{1,2}[-.\s/]\d{1,2}\b|\b(19|20)\d{2}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일/g,
     mask: '[생년월일]',
   },
-  // 한국 주소(보수적): 시/도 또는 시·구·동 뒤에 번지(숫자-숫자) 또는 '번지/로/길 + 숫자'.
+  // 한국 주소(시/도 접두 포함, 보수적): 시·구·동 뒤에 번지(숫자-숫자) 또는 '번지/로/길 + 숫자'.
   // 비정형 주소는 100% 못 잡으므로 표지어 잔존 검사(hasResidualPii)로 fail-closed 보완.
   // 예: "서울특별시 강남구 역삼동 123-45", "경기도 ... 12번길 3".
   {
@@ -71,7 +71,24 @@ const PII_RULES = [
     re: /(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별시|광역시|특별자치시|특별자치도|도)?\s*\S*?(?:시|군|구)\s*\S*?(?:동|읍|면|로|길)\s*\d{1,4}(?:[-]\d{1,4})?(?:번지|번길|호)?/g,
     mask: '[주소]',
   },
+  // 한국 주소(표지어 없는 행정구역+번지, 보수적): 시/도 접두 없이도 '구·군·동·읍·면·로·길'
+  // 행정구역 토큰(앞에 한글 지명) + 번지 숫자(\d+(-\d+)?)를 마스킹한다.
+  // 예: "강남구 역삼동 123-45", "역삼로 12-3". 행정구역+숫자 동반을 요구해 오탐을 줄인다.
+  {
+    type: 'address',
+    re: /[가-힣]{1,6}(?:구|군)\s*[가-힣]{1,6}(?:동|읍|면|로|길)\s*\d{1,4}(?:-\d{1,4})?(?:번지|번길|호)?|[가-힣]{1,6}(?:로|길)\s*\d{1,4}(?:-\d{1,4})?(?:번지|번길|호)?/g,
+    mask: '[주소]',
+  },
 ];
+
+// 이름 소개/인사 맥락(표지어 없는 단독 이름은 정규식 한계지만, 소개 맥락은 잡는다):
+// "저는 홍길동입니다", "제 이름은 김철수", "환자는 박영희", "환자명 이몽룡".
+// 소개어 뒤 2~4 한글 성명을 마스킹한다(소개어는 보존, 성명만 [이름]).
+const NAME_INTRO_RE = new RegExp(
+  '(저는|제\\s*이름은|이름은|성함은|환자명|환자는|환자\\s*이름은|보호자는)' +
+    '\\s*([가-힣]{2,4})(?=(?:입니다|이고|이며|이에요|예요|이라고|라고|님|씨|이|가|은|는|,|\\.|\\s|$))',
+  'g',
+);
 
 // 이름+연락처 조합(맥락) 마스킹: "홍길동 010-..." 같이 한글 성명 뒤 연락처가 붙는 패턴.
 // 연락처 자체는 위 phone 규칙이 잡으므로, 여기서는 성명 토큰만 마스킹한다.
@@ -171,6 +188,15 @@ export function maskPii(text) {
   NAME_MARKER_RE.lastIndex = 0;
   masked = masked.replace(NAME_MARKER_RE, (_m, lead) => `${lead ?? ''}[이름]`);
 
+  // 이름 소개/인사 맥락 — "저는 홍길동", "제 이름은 김철수", "환자명 이몽룡" 등.
+  // 소개어(group1)는 보존하고 성명(group2)만 [이름]으로.
+  NAME_INTRO_RE.lastIndex = 0;
+  if (NAME_INTRO_RE.test(masked)) {
+    found.add('name_intro');
+  }
+  NAME_INTRO_RE.lastIndex = 0;
+  masked = masked.replace(NAME_INTRO_RE, (_m, intro) => `${intro ?? ''} [이름]`);
+
   for (const rule of PII_RULES) {
     rule.re.lastIndex = 0;
     if (rule.re.test(masked)) {
@@ -184,26 +210,50 @@ export function maskPii(text) {
 }
 
 /**
- * RAG 검색 결과 출력단 마스킹(§6.4 양방향 마스킹·전 필드).
- * 검색 결과 객체의 `content`·`source`·`heading` 각 필드에 결정론적 maskPii를 적용한다.
+ * RAG 검색 결과 출력단 마스킹(§6.4 양방향 마스킹·전 필드) + fail-closed 신호.
+ * 검색 결과 객체의 `content`·`source`·`heading` 각 필드에 결정론적 maskPii를 적용하고,
+ * **마스킹 후에도 각 필드에 잔존 PII(표지어+부분숫자·비정형 주소 등)가 있으면** 그 필드를
+ * 보수적으로 **추가 차폐**하고 `residualRisk: true`로 신호한다(호출자 fail-closed 근거).
  * - content만 마스킹하면 파일명(source)·제목(heading)의 타 환자 식별정보가 샌다 → 전 필드.
  * - 결정론적(비-LLM)이며 throw하지 않는다. 문자열 필드만 마스킹하고 나머지는 보존한다.
  * @param {Record<string, unknown>} obj  검색 결과 한 행(또는 임의 객체)
- * @returns {{ masked: Record<string, unknown>, foundTypes: string[] }}
+ * @returns {{ masked: Record<string, unknown>, foundTypes: string[], residualRisk: boolean,
+ *            residualFields: string[] }}
  */
 export function maskFields(obj) {
   const found = new Set();
+  const residualFields = [];
   const src = obj && typeof obj === 'object' ? obj : {};
   const out = { ...src };
   for (const field of ['content', 'source', 'heading']) {
     const v = src[field];
     if (typeof v === 'string' && v.length > 0) {
-      const { masked, foundTypes } = maskPii(v);
-      out[field] = masked;
+      let maskedVal;
+      let foundTypes;
+      try {
+        ({ masked: maskedVal, foundTypes } = maskPii(v));
+      } catch {
+        // 마스킹 실패 자체가 잔존 위험 → 필드 전체 차폐 + residualRisk.
+        out[field] = '[차폐]';
+        residualFields.push(field);
+        continue;
+      }
       for (const t of foundTypes) found.add(t);
+      // 잔존 PII 검사(표지어+부분숫자·비정형 주소·명백 시그니처). 남으면 보수적 추가 차폐.
+      if (hasResidualPii(maskedVal)) {
+        out[field] = '[차폐]'; // 부분 원문 잔류 금지 — 필드 전체 차폐(fail-closed).
+        residualFields.push(field);
+      } else {
+        out[field] = maskedVal;
+      }
     }
   }
-  return { masked: out, foundTypes: [...found] };
+  return {
+    masked: out,
+    foundTypes: [...found],
+    residualRisk: residualFields.length > 0,
+    residualFields,
+  };
 }
 
 /**
@@ -283,6 +333,12 @@ function hasResidualPii(masked) {
   // 주소 표지어 + 행정구역 표지(동/읍/면/로/길/번지/호)가 마스킹 토큰 밖에 잔존.
   const addrResidual = /주소\s*(?:[:：]|은|는|이|가|=)?\s*(?!\[)[^\[\]\n]{0,12}?(?:동|읍|면|로|길|번지|호)(?:\s|\d|$|[^가-힣])/;
   if (addrResidual.test(masked)) return true;
+
+  // 표지어 없이도, 마스킹 후 남은 '행정구역 토큰(동/읍/면/로/길) + 인접 숫자' 잔존이면
+  // 비정형 주소 의심 → 보수적 uncertain. 정상 마스킹 시 해당 토막은 [주소]로 치환되므로
+  // 여기서 매치되면 패턴이 못 잡은 잔존이다. (예: '산12-3' 등 변칙 표기)
+  const addrLeftover = /[가-힣]{1,6}(?:동|읍|면|로|길)\s*\d{1,4}(?:-\d{1,4})?(?:번지|번길|호)?/;
+  if (addrLeftover.test(masked)) return true;
 
   return false;
 }

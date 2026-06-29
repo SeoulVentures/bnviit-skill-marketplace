@@ -47,4 +47,29 @@ test('R3: --root만으로 캐시 온리 질의 성공(RAG_CACHE_DIR/RAG_ALLOW_DO
   assert.ok(rows.some((r) => r.source.endsWith('care.md')),
     'cacheDir 미주입 시 embed가 번들 .cache로 폴백→캐시 미스/다운로드 시도로 실패. --root 파생 캐시 주입이 동작해야 함');
 });
+test('--query-file: 파일에서 질의를 읽어 검색(argv-safe 브리지)', { timeout: 180000 }, () => {
+  const { d, env } = ingested();
+  // 질의를 파일에 저장(셸/argv 미경유) → --query-file로 전달. 위치인자 없음.
+  const qf = path.join(d, 'rag-query.txt');
+  fs.writeFileSync(qf, '재진 예약');
+  const out = execFileSync('node', ['query.mjs', '--query-file', qf, '--json'],
+    { cwd: RAG, env, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+  const rows = JSON.parse(out);
+  assert.ok(Array.isArray(rows) && rows.length > 0, '파일 질의로 결과 회수 실패');
+  assert.ok(rows.some((r) => r.source.endsWith('care.md')), '기대 출처 미회수(--query-file 미동작)');
+});
+
+test('--query-file: 셸 메타문자가 든 질의도 명령 실행 없이 안전 처리', { timeout: 180000 }, () => {
+  const { d, env } = ingested();
+  // 셸 메타문자 포함 질의를 파일에 저장 → query.mjs는 이를 평범한 텍스트 질의로만 취급.
+  // (파일 경유라 셸 보간이 전혀 없으므로 명령 실행으로 이어지지 않는다.)
+  const qf = path.join(d, 'rag-query-inj.txt');
+  const sentinel = path.join(d, 'PWNED');
+  fs.writeFileSync(qf, `재진 예약"; touch ${sentinel}; echo $(whoami) \`id\``);
+  const out = execFileSync('node', ['query.mjs', '--query-file', qf, '--json'],
+    { cwd: RAG, env, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+  JSON.parse(out); // 정상 JSON 산출(파싱 성공)
+  assert.ok(!fs.existsSync(sentinel), '명령 주입 실행됨(sentinel 파일 생성) — 브리지 비안전');
+});
+
 // (R4#2: status.mjs 회귀는 status.mjs가 생성되는 Task 9로 이동 — Task 8 시점엔 status.mjs가 없어 의존성 역전.)
